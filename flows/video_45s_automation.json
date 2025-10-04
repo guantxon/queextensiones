@@ -1,0 +1,532 @@
+{
+  "name": "Video 45s - Form to Automated Production",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "brief-video-45s",
+        "formTitle": "Brief para video automatizado de 45s",
+        "formDescription": "Ingresa el guion y sube logo + avatar para generar el video final.",
+        "responseMode": "onReceived",
+        "options": {
+          "allowMultipleSubmissions": false,
+          "fields": [
+            {
+              "fieldLabel": "Guion",
+              "fieldName": "script",
+              "type": "textarea",
+              "required": true,
+              "placeholder": "Pega el guion completo del video"
+            },
+            {
+              "fieldLabel": "Logo",
+              "fieldName": "logo",
+              "type": "file",
+              "required": true,
+              "description": "Sube el logo en PNG o SVG con fondo transparente"
+            },
+            {
+              "fieldLabel": "Avatar",
+              "fieldName": "avatar",
+              "type": "file",
+              "required": true,
+              "description": "Sube un retrato del portavoz a utilizar"
+            }
+          ]
+        }
+      },
+      "id": "FormTrigger",
+      "name": "Formulario Brief",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const rawScript = $json.script?.value || $json.script;\nreturn [{\n  script: {\n    raw: rawScript,\n    cleaned: rawScript.trim().replace(/\\s+/g, ' '),\n    targetDurationSeconds: 45,\n    segments: 3\n  },\n  assets: {\n    logo: $binary.logo,\n    avatar: $binary.avatar\n  }\n}];"
+      },
+      "id": "NormalizeInput",
+      "name": "Normalizar Entradas",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "chat",
+        "model": "gpt-4.1-mini",
+        "systemMessage": "Eres un director creativo. Divide el guion en escenas coherentes para un video de 45 segundos. Devuelve JSON con \"scenes\": [ {\"order\":1,\"start\":0,\"end\":15,\"prompt\":\"...\",\"overlayText\":\"...\" } ]. Asegúrate de que cada escena use elementos del guion e incluya instrucciones para integrar logo y avatar cuando sea relevante.",
+        "messages": [
+          {
+            "text": "Guion:\n{{$json[\"script\"][\"cleaned\"]}}\nDuración objetivo: {{$json[\"script\"][\"targetDurationSeconds\"]}} segundos",
+            "type": "user"
+          }
+        ],
+        "additionalFields": {
+          "responseFormat": "json"
+        }
+      },
+      "id": "StoryboardLLM",
+      "name": "Storyboard IA",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        200
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "{{OPENAI_API_CREDENTIAL_ID}}",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const scenes = Array.isArray($json.data?.scenes) ? $json.data.scenes : [];\nreturn scenes.map(scene => ({\n  scene,\n  script: $items(0)[0].json.script,\n  assets: $items(0)[0].json.assets\n}));"
+      },
+      "id": "ExpandScenes",
+      "name": "Expandir Escenas",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "scene"
+      },
+      "id": "SplitScenes",
+      "name": "Iterar Escenas",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        340,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "https://api.openai.com/v1/images/generations",
+        "responseFormat": "json",
+        "options": {
+          "batchSize": 1
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.openAiApi.apiKey }}"
+            }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "model",
+              "value": "gpt-image-1"
+            },
+            {
+              "name": "prompt",
+              "value": "{{$json.scene.prompt}}. Incluir espacio para overlay de logo y avatar cuando se indique. Estilo cinematográfico, 16:9, video frame."
+            },
+            {
+              "name": "size",
+              "value": "1792x1024"
+            },
+            {
+              "name": "n",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "id": "GenerateSceneImage",
+      "name": "Generar Imagen Escena",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        560,
+        80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{OPENAI_HEADER_AUTH_ID}}",
+          "name": "OpenAI Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {},
+        "sourceKey": "data[0].b64_json",
+        "destinationKey": "sceneImage",
+        "encoding": "base64"
+      },
+      "id": "DecodeSceneImage",
+      "name": "Decodificar Imagen",
+      "type": "n8n-nodes-base.moveBinaryData",
+      "typeVersion": 1,
+      "position": [
+        780,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const scene = $json.scene;\nconst duration = (scene.end - scene.start) || 15;\nreturn [{\n  scene,\n  duration,\n  overlayText: scene.overlayText,\n  image: $binary.sceneImage,\n  script: $json.script,\n  assets: $json.assets\n}];"
+      },
+      "id": "AssembleScenePayload",
+      "name": "Preparar Payload Escena",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "wait",
+        "join": "keepKeyMatches",
+        "propertyName": "scene.order"
+      },
+      "id": "MergeScenes",
+      "name": "Unir Escenas",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "options": {
+          "response": "file"
+        },
+        "url": "https://api.openai.com/v1/audio/speech",
+        "method": "POST",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.openAiApi.apiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersJson": "{\n  \"model\": \"gpt-4o-mini-tts\",\n  \"voice\": \"alloy\",\n  \"input\": \"{{$json.script.cleaned}}\",\n  \"format\": \"mp3\"\n}"
+      },
+      "id": "VoiceOver",
+      "name": "Generar Voz en Off",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -40
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{OPENAI_HEADER_AUTH_ID}}",
+          "name": "OpenAI Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "https://pixabay.com/api/sounds/",
+        "options": {},
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "key",
+              "value": "={{$credentials.pixabayApi.apiKey}}"
+            },
+            {
+              "name": "q",
+              "value": "corporate background music"
+            },
+            {
+              "name": "order",
+              "value": "popular"
+            },
+            {
+              "name": "min_duration",
+              "value": "40"
+            },
+            {
+              "name": "max_duration",
+              "value": "60"
+            }
+          ]
+        }
+      },
+      "id": "SearchMusic",
+      "name": "Buscar Musica",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -260
+      ],
+      "credentials": {
+        "pixabayApi": {
+          "id": "{{PIXABAY_API_CREDENTIAL_ID}}",
+          "name": "Pixabay"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const hit = $json.hits?.[0];\nif (!hit) { throw new Error('No se encontró pista en Pixabay'); }\nreturn [{ downloadUrl: hit.audio, duration: hit.duration }];"
+      },
+      "id": "SelectMusic",
+      "name": "Seleccionar Pista",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        120,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "={{$json.downloadUrl}}",
+        "options": {
+          "response": "file"
+        }
+      },
+      "id": "DownloadMusic",
+      "name": "Descargar Musica",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        340,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "command": "./scripts/render_video.sh",
+        "arguments": "{{$json}}",
+        "options": {
+          "output": "file"
+        }
+      },
+      "id": "RenderVideo",
+      "name": "Renderizar Video",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "binary",
+        "options": {
+          "binaryPropertyName": "video"
+        },
+        "propertyName": "data"
+      },
+      "id": "ReturnResponse",
+      "name": "Entregar Video",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1660,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Formulario Brief": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Entradas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Entradas": {
+      "main": [
+        [
+          {
+            "node": "Storyboard IA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generar Voz en Off",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Musica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Storyboard IA": {
+      "main": [
+        [
+          {
+            "node": "Expandir Escenas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expandir Escenas": {
+      "main": [
+        [
+          {
+            "node": "Iterar Escenas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Iterar Escenas": {
+      "main": [
+        [
+          {
+            "node": "Generar Imagen Escena",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unir Escenas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Imagen Escena": {
+      "main": [
+        [
+          {
+            "node": "Decodificar Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decodificar Imagen": {
+      "main": [
+        [
+          {
+            "node": "Preparar Payload Escena",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Payload Escena": {
+      "main": [
+        [
+          {
+            "node": "Unir Escenas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Voz en Off": {
+      "main": [
+        [
+          {
+            "node": "Renderizar Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Musica": {
+      "main": [
+        [
+          {
+            "node": "Renderizar Video",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Unir Escenas": {
+      "main": [
+        [
+          {
+            "node": "Renderizar Video",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Renderizar Video": {
+      "main": [
+        [
+          {
+            "node": "Entregar Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Musica": {
+      "main": [
+        [
+          {
+            "node": "Seleccionar Pista",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seleccionar Pista": {
+      "main": [
+        [
+          {
+            "node": "Descargar Musica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "versionId": "53b9ce6f-f38e-4c26-9198-2ae13f6f0151"
+}
