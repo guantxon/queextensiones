@@ -303,7 +303,7 @@
         140
       ],
       "parameters": {
-        "functionCode": "const items = [];\nfor (const item of items) {\n  const data = item.json;\n  let phone = data.phone || '';\n  if (!phone.startsWith('+')) {\n    phone = `+34${phone}`;\n  }\n  const message = data.action === 'check_in'\n    ? 'Tu fichaje de entrada se ha registrado correctamente en Odoo.'\n    : 'Tu fichaje de salida se ha registrado correctamente en Odoo.';\n\n  items.push({\n    json: {\n      ...data,\n      confirmationMessage: message,\n      replyPayload: {\n        to: phone,\n        message,\n        metadata: {\n          source: 'n8n',\n          action: data.action,\n          createdAt: new Date().toISOString()\n        }\n      },\n      webhookResponse: {\n        status: 'success',\n        action: data.action,\n        phone,\n        message,\n        odooAttendanceId: data.id ?? data.record_id ?? null,\n        receivedAt: data.receivedAt\n      }\n    }\n  });\n}\nreturn items;"
+        "functionCode": "const results = []\\n\\nfor (const item of $input.all()) {\\n  const data = item.json;\\n  let phone = data.phone || '';\\n  if (!phone.startsWith('+')) {\\n    phone = `+34${phone}`;\\n  }\\n\\n  const message = data.action === 'check_in'\\n    ? 'Tu fichaje de entrada se ha registrado correctamente en Odoo.'\\n    : 'Tu fichaje de salida se ha registrado correctamente en Odoo.';\\n\\n  results.push({\\n    json: {\\n      ...data,\\n      confirmationMessage: message,\\n      replyPayload: {\\n        to: phone,\\n        message,\\n        metadata: {\\n          source: 'n8n',\\n          action: data.action,\\n          createdAt: new Date().toISOString()\\n        }\\n      },\\n      webhookResponse: {\\n        status: 'success',\\n        action: data.action,\\n        phone,\\n        message,\\n        odooAttendanceId: data.id ?? data.record_id ?? null,\\n        receivedAt: data.receivedAt\\n      }\\n    }\\n  });\\n}\\n\\nreturn results;"
       },
       "notes": "Genera el mensaje de confirmación y prepara la respuesta tanto para WhatsApp como para Evolution.",
       "notesInFlow": true
@@ -322,13 +322,10 @@
         "url": "https://api.evolution.com/v1/whatsapp/messages",
         "jsonParameters": true,
         "options": {
-          "bodyContentType": "json",
-          "headers": {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer {{ $env.EVOLUTION_API_TOKEN }}"
-          }
+          "bodyContentType": "json"
         },
-        "bodyParametersJson": "={{$json.replyPayload}}"
+        "bodyParametersJson": "={{$json.replyPayload}}",
+        "headerParametersJson": "={{({ 'Content-Type': 'application/json', Authorization: $env?.EVOLUTION_API_TOKEN ? `Bearer ${$env.EVOLUTION_API_TOKEN}` : '' })}}"
       },
       "notes": "Envía la confirmación al usuario final mediante la API de Evolution. Sustituye la URL y la cabecera Authorization según tu entorno.",
       "notesInFlow": true
