@@ -321,9 +321,6 @@
         "method": "POST",
         "url": "https://api.evolution.com/v1/whatsapp/messages",
         "jsonParameters": true,
-        "options": {
-          "bodyContentType": "json"
-        },
         "bodyParametersJson": "={{$json.replyPayload}}",
         "headerParametersJson": "={{({ 'Content-Type': 'application/json', Authorization: $env?.EVOLUTION_API_TOKEN ? `Bearer ${$env.EVOLUTION_API_TOKEN}` : '' })}}"
       },
