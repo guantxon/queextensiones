@@ -1,0 +1,1708 @@
+{
+  "name": "HR Omni WhatsApp Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "id": "trigger-whatsapp",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "position": [
+        -640,
+        0
+      ],
+      "typeVersion": 1,
+      "webhookId": "REPLACE_WITH_WEBHOOK",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "REPLACE_WHATSAPP_TRIGGER_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_EMPLOYEE_SHEET_ID",
+          "cachedResultName": "Employees",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REPLACE_EMPLOYEE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Employees",
+          "cachedResultName": "Employees"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Phone",
+              "lookupValue": "={{ $json.messages[0].from }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "lookup-employees",
+      "name": "Lookup Employee",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        -416,
+        -96
+      ],
+      "typeVersion": 4.6,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_GOOGLE_SHEETS_CRED",
+          "name": "Google Sheets Service"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const trigger = $input.item.json;\nconst employees = $items(\"Lookup Employee\", \"main\", 0)?.[0]?.json?.data || [];\nconst employee = employees[0] || null;\nreturn [{\n  json: {\n    trigger,\n    employee,\n    employeeExists: !!employee,\n    role: employee ? employee.role : null,\n    isManager: employee ? employee.role?.toLowerCase() === 'responsable' : false\n  },\n}];"
+      },
+      "id": "context-builder",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -192,
+        -32
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "exists",
+              "leftValue": "={{ $json.employeeExists }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "isTrue"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-employee",
+      "name": "Employee Found?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        16,
+        -32
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "REPLACE_PHONE_NUMBER_ID",
+        "recipientPhoneNumber": "={{ $json.trigger.messages[0].from }}",
+        "textBody": "No encontramos tu número en el registro de empleados. Contacta con RRHH para darte de alta.",
+        "additionalFields": {}
+      },
+      "id": "whatsapp-unregistered",
+      "name": "WhatsApp Not Registered",
+      "type": "n8n-nodes-base.whatsApp",
+      "position": [
+        240,
+        -240
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_WHATSAPP_API_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "employeeName",
+              "name": "employeeName",
+              "type": "string",
+              "value": "={{ $json.employee.name }}"
+            },
+            {
+              "id": "employeeRole",
+              "name": "employeeRole",
+              "type": "string",
+              "value": "={{ $json.role }}"
+            },
+            {
+              "id": "employeeId",
+              "name": "employeeId",
+              "type": "string",
+              "value": "={{ $json.employee.employee_id }}"
+            },
+            {
+              "id": "managerFlag",
+              "name": "isManager",
+              "type": "boolean",
+              "value": "={{ $json.isManager }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-employee-context",
+      "name": "Set Employee Context",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        240,
+        48
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "textExists",
+                    "leftValue": "={{ $json.trigger.messages[0].text }}",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Text"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "audioExists",
+                    "leftValue": "={{ $json.trigger.messages[0].audio }}",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Audio"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "imageExists",
+                    "leftValue": "={{ $json.trigger.messages[0].image }}",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Image"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "documentExists",
+                    "leftValue": "={{ $json.trigger.messages[0].document }}",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Document"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "locationExists",
+                    "leftValue": "={{ $json.trigger.messages[0].location }}",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Location"
+            }
+          ]
+        }
+      },
+      "id": "switch-message-type",
+      "name": "Identify Message Type",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        464,
+        176
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "textBody",
+              "name": "message_text",
+              "type": "string",
+              "value": "={{ $json.trigger.messages[0].text.body }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-text-message",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        736,
+        32
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.trigger.messages[0].audio.id }}"
+      },
+      "id": "download-audio",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.whatsApp",
+      "position": [
+        720,
+        192
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_WHATSAPP_API_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "audio-http",
+      "name": "Audio Download",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        928,
+        192
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "audio-transcribe",
+      "name": "Transcribe Audio",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "position": [
+        1152,
+        192
+      ],
+      "typeVersion": 1.8,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CRED",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "audioText",
+              "name": "message_text",
+              "type": "string",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-audio-text",
+      "name": "Audio to Text",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1360,
+        192
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.trigger.messages[0].image.id }}"
+      },
+      "id": "download-image",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.whatsApp",
+      "position": [
+        720,
+        352
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_WHATSAPP_API_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "image-http",
+      "name": "Image Download",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        928,
+        352
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "inputType": "base64",
+        "options": {}
+      },
+      "id": "image-analyze",
+      "name": "Vision Caption",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "position": [
+        1152,
+        352
+      ],
+      "typeVersion": 1.8,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CRED",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "imageSummary",
+              "name": "message_text",
+              "type": "string",
+              "value": "={{ $json.content }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-image-text",
+      "name": "Image to Text",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1360,
+        352
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.trigger.messages[0].document.id }}"
+      },
+      "id": "download-document",
+      "name": "Download Document",
+      "type": "n8n-nodes-base.whatsApp",
+      "position": [
+        720,
+        512
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_WHATSAPP_API_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "document-http",
+      "name": "Document Download",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        928,
+        512
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "id": "extract-document",
+      "name": "Extract Document",
+      "type": "n8n-nodes-base.extractFromFile",
+      "position": [
+        1152,
+        512
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "documentText",
+              "name": "message_text",
+              "type": "string",
+              "value": "={{ $json.data.text }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-document-text",
+      "name": "Document to Text",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1360,
+        512
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "locationWarning",
+              "name": "locationSummary",
+              "type": "string",
+              "value": "={{ $json.trigger.messages[0].location.name ? 'El usuario ha enviado una localización guardada llamada \"' + $json.trigger.messages[0].location.name + '\". Solicita ubicación actual en tiempo real.' : 'Ubicación compartida: lat ' + $json.trigger.messages[0].location.latitude + ', lon ' + $json.trigger.messages[0].location.longitude }}"
+            },
+            {
+              "id": "locationLat",
+              "name": "locationLat",
+              "type": "string",
+              "value": "={{ $json.trigger.messages[0].location.latitude }}"
+            },
+            {
+              "id": "locationLon",
+              "name": "locationLon",
+              "type": "string",
+              "value": "={{ $json.trigger.messages[0].location.longitude }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-location",
+      "name": "Prepare Location",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        736,
+        672
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "merge-text-audio",
+      "name": "Merge Text/Audio",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        1584,
+        144
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "merge-image",
+      "name": "Merge Image",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        1776,
+        224
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "merge-document",
+      "name": "Merge Document",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        1968,
+        304
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "useDataOfInput": 1
+      },
+      "id": "merge-location",
+      "name": "Merge Location",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        2160,
+        384
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analiza el mensaje recibido.\nContenido normalizado: {{ $json.message_text }}\nInformación del empleado:\n- Nombre: {{ $json.employeeName }}\n- Rol: {{ $json.employeeRole }}\n- Es responsable: {{ $json.isManager }}\n- Resumen de ubicación (si existe): {{ $json.locationSummary }}\n\nClasifica la intención principal exactamente en uno de estos valores (sin texto adicional):\n1. fichajes_consulta\n2. fichajes_registro\n3. vacaciones_consulta\n4. vacaciones_registro\n5. ausencias_consulta\n6. ausencias_registro\n7. nominas_documento\n8. facturas_consulta\n9. facturas_creacion\n10. oportunidades_consulta\n11. oportunidades_creacion\nSi no puedes determinar, responde \"manual_revision\"."
+      },
+      "id": "intent-router",
+      "name": "Intent Router",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [
+        2368,
+        80
+      ],
+      "typeVersion": 1.7,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CRED",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "fichajesConsulta",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "fichajes_consulta"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "FichajesConsulta"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "fichajesRegistro",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "fichajes_registro"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "FichajesRegistro"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "vacacionesConsulta",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "vacaciones_consulta"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "VacacionesConsulta"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "vacacionesRegistro",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "vacaciones_registro"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "VacacionesRegistro"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "ausenciasConsulta",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "ausencias_consulta"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "AusenciasConsulta"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "ausenciasRegistro",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "ausencias_registro"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "AusenciasRegistro"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "nominasDocumento",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "nominas_documento"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Nominas"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "facturasConsulta",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "facturas_consulta"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "FacturasConsulta"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "facturasCreacion",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "facturas_creacion"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "FacturasCreacion"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "oportunidadesConsulta",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "oportunidades_consulta"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "OportunidadesConsulta"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "oportunidadesCreacion",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "oportunidades_creacion"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "OportunidadesCreacion"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "id": "manual",
+                    "leftValue": "={{ $json.text }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "manual_revision"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Manual"
+            }
+          ]
+        }
+      },
+      "id": "switch-intent",
+      "name": "Route Intent",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        2560,
+        80
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "embeddings-openai",
+      "name": "Embeddings OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        2112,
+        -400
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CRED",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "hr_assistant_vectors",
+          "cachedResultName": "hr_assistant_vectors"
+        },
+        "options": {}
+      },
+      "id": "supabase-vector",
+      "name": "Supabase Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        2320,
+        -400
+      ],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "description": "Repositorio de conocimiento HR"
+      },
+      "id": "knowledge-tool",
+      "name": "Knowledge Base",
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "position": [
+        2528,
+        -400
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {}
+      },
+      "id": "chat-model-core",
+      "name": "OpenAI Core Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [
+        2720,
+        -400
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CRED",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Actúas como agente de fichajes para RRHH.\nDatos del empleado: ${$json.employeeName} (ID ${$json.employeeId})\nRol: ${$json.employeeRole} - Responsable: ${$json.isManager}.\nMensaje normalizado: ${$json.message_text}.\nSi hay información de ubicación: ${$json.locationSummary}.\n\nCapacidades:\n- Consultar fichajes en Google Sheets mensual (usa la herramienta correspondiente). Los libros siguen el formato \"YYYY-MM\" y cada pestaña corresponde al día (DD).\n- Registrar fichajes en Google Sheets y en Odoo hr.attendance.\n- Para registrar, decide si es entrada o salida. Si no está claro, usa WhatsApp sendAndWait para preguntar.\n- Solicita ubicación en vivo si el mensaje trae una ubicación guardada (tiene name).\n- Si falta ubicación válida, solicita ubicación actual.\n- Cuando registres entrada: escribe en Google Sheets (hoja del día) con columnas [Empleado, FechaHora, Tipo, Latitud, Longitud] y llama a Odoo con display_name \"Entrada\".\n- Para salida igual pero display_name \"Salida\" y campos out_latitude/out_longitude.\n- Devuelve un resumen claro por WhatsApp y registra un bloque de conocimiento en el vector store con fecha/hora, acción y resultado.\n- Si es consulta, responde con la información solicitada (propia o de su equipo si es responsable).\n- Nunca inventes datos: pregunta cuando falte información clave.\n` }}",
+        "options": {
+          "systemMessage": "Eres un asistente experto en fichajes que debe cumplir normativa laboral española."
+        }
+      },
+      "id": "agent-fichajes",
+      "name": "Fichajes Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        -96
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Gestiona solicitudes de vacaciones.\n- Diferencia entre consulta y registro según contexto.\n- Para registrar exige fecha inicio y fin; si faltan pregunta.\n- Valida saldo en Google Sheets/Odoo.\n- Registra en Odoo (hr.leave) y en hoja compartida.\n- Resume y registra en vector store."
+      },
+      "id": "agent-vacaciones",
+      "name": "Vacaciones Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        112
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Gestiona ausencias justificadas o no justificadas.\n- Reglas similares a vacaciones pero admite registro puntual.\n- Solicita fecha inicio/fin o fecha única.\n- Registra en Odoo hr.leave y en hoja de ausencias.\n- Genera resumen y guarda en vector store."
+      },
+      "id": "agent-ausencias",
+      "name": "Ausencias Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        272
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Entrega nóminas.\n- Localiza en Google Drive la nómina del mes para el empleado.\n- Si falta mes, deduce el último disponible o pregunta.\n- Envía documento por WhatsApp y registra acceso en vector store y Odoo (log)."
+      },
+      "id": "agent-nominas",
+      "name": "Nominas Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        432
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Gestiona facturas.\n- Para consultas busca factura exacta. Solicita datos faltantes (número, fecha, cliente).\n- Para creación recopila campos obligatorios y crea borrador en Odoo account.move, guarda en Google Sheets y vector store.\n- Confirma al usuario y comparte PDF si aplica."
+      },
+      "id": "agent-facturas",
+      "name": "Facturas Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        592
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Gestiona oportunidades comerciales.\n- Para consultas obtiene estado desde Odoo CRM y hojas.\n- Para creación solicita datos clave (cliente, importe, probabilidad).\n- Registra en Odoo crm.lead y en hoja.\n- Cierra con resumen y registro en vector store."
+      },
+      "id": "agent-oportunidades",
+      "name": "Oportunidades Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        752
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Si la intención es manual_revision, responde que el caso se derivará a un humano y registra en vector store."
+      },
+      "id": "agent-manual",
+      "name": "Manual Review Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2864,
+        912
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "REPLACE_PHONE_NUMBER_ID",
+        "recipientPhoneNumber": "={{ $json.trigger.messages[0].from }}",
+        "textBody": "={{ $json.output.message || $json.output || $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "whatsapp-response",
+      "name": "WhatsApp Response",
+      "type": "n8n-nodes-base.whatsApp",
+      "position": [
+        3456,
+        160
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_WHATSAPP_API_CRED",
+          "name": "WhatsApp Business"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "summary",
+              "name": "knowledge_entry",
+              "type": "string",
+              "value": "={{ $json.output.summary || $json.summary || '' }}"
+            },
+            {
+              "id": "intentLabel",
+              "name": "intent",
+              "type": "string",
+              "value": "={{ $json.text || $json.intent || '' }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "set-knowledge",
+      "name": "Prepare Knowledge",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        3232,
+        -32
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "text": "={{ $json.knowledge_entry }}",
+        "metadata": "={{ JSON.stringify({ employee: $json.employeeName, intent: $json.intent, timestamp: new Date().toISOString() }) }}"
+      },
+      "id": "vector-insert",
+      "name": "Log Knowledge",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        3456,
+        -32
+      ],
+      "typeVersion": 1.2
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Lookup Employee",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Employee": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Employee Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Employee Found?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Not Registered",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Employee Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Employee Context": {
+      "main": [
+        [
+          {
+            "node": "Identify Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Message Type": {
+      "main": [
+        [
+          {
+            "node": "Extract Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Audio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Text/Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Audio": {
+      "main": [
+        [
+          {
+            "node": "Audio Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audio Download": {
+      "main": [
+        [
+          {
+            "node": "Transcribe Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe Audio": {
+      "main": [
+        [
+          {
+            "node": "Audio to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audio to Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Text/Audio",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Text/Audio": {
+      "main": [
+        [
+          {
+            "node": "Merge Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image": {
+      "main": [
+        [
+          {
+            "node": "Image Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Download": {
+      "main": [
+        [
+          {
+            "node": "Vision Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Caption": {
+      "main": [
+        [
+          {
+            "node": "Image to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image to Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Image",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Image": {
+      "main": [
+        [
+          {
+            "node": "Merge Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Document": {
+      "main": [
+        [
+          {
+            "node": "Document Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Download": {
+      "main": [
+        [
+          {
+            "node": "Extract Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Document": {
+      "main": [
+        [
+          {
+            "node": "Document to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document to Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Document",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Document": {
+      "main": [
+        [
+          {
+            "node": "Merge Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Location": {
+      "main": [
+        [
+          {
+            "node": "Merge Location",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Location": {
+      "main": [
+        [
+          {
+            "node": "Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Store": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "Knowledge Base",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Core Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Fichajes Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Vacaciones Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Ausencias Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Nominas Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Facturas Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Oportunidades Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Manual Review Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Knowledge Base": {
+      "ai_tool": [
+        [
+          {
+            "node": "Fichajes Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Vacaciones Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Ausencias Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Nominas Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Facturas Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Oportunidades Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Manual Review Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Intent": {
+      "main": [
+        [
+          {
+            "node": "Fichajes Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fichajes Agent",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Vacaciones Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vacaciones Agent",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Ausencias Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ausencias Agent",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Nominas Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Facturas Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Facturas Agent",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Oportunidades Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Oportunidades Agent",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Manual Review Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fichajes Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vacaciones Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ausencias Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nominas Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Facturas Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Oportunidades Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Review Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Knowledge": {
+      "main": [
+        [
+          {
+            "node": "Log Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Knowledge": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
