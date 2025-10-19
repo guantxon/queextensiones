@@ -1,0 +1,688 @@
+{
+  "name": "Presupuestos Eficiencia Energética WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "presupuestos/whatsapp",
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }"
+      },
+      "id": "WebhookEntrada",
+      "name": "Webhook Entrada WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "propertyName": "={{$json.body.type || $json.type || 'text'}}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "equal",
+              "value": "text"
+            },
+            {
+              "operation": "equal",
+              "value": "image"
+            },
+            {
+              "operation": "equal",
+              "value": "document"
+            }
+          ]
+        }
+      },
+      "id": "RouterTipoMensaje",
+      "name": "Router Tipo Mensaje",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "get",
+        "property": "estadoSesion",
+        "key": "={{'session:' + ($json.body.from || $json.from)}}"
+      },
+      "id": "RedisObtenerEstado",
+      "name": "Estado desde Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        440,
+        -120
+      ],
+      "credentials": {
+        "redis": {
+          "id": "={{$env.REDIS_CRED_ID}}",
+          "name": "Redis Principal"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Orquestador de estados conversacionales.\n// Recupera estado previo, decide siguiente pregunta y acciones.\ninterface Elementos {\n  ac_units: number;\n  antennas: number;\n  pipes: number;\n  cables: number;\n  gutters: number;\n  solar_panels: number;\n}\ninterface ConversacionState {\n  step: number;\n  questions: string[];\n  answers: {\n    perimeter_roof_m?: number;\n    facade_area_m2?: number;\n    heights?: number;\n    elements?: Elementos;\n    images?: { fachada: number; cubierta: number };\n  };\n  awaitingConfirmation?: boolean;\n  resumenGenerado?: boolean;\n  ultimaPregunta?: string;\n  vision?: any;\n  catastro?: any;\n}\nfunction defaultState(): ConversacionState {\n  return {\n    step: 0,\n    questions: [\n      'Indica el perímetro de la cubierta (m). Ej.: 145,6',\n      'Indica la superficie total de fachada (m²).',\n      '¿Cuál es el número de alturas del edificio?',\n      '¿Cuántos elementos hay que desmontar y volver a montar (aires, antenas, canaletas, tuberías, cables, placas solares)? Detállalo por tipo.',\n      'Sube fotos de las fachadas y de la cubierta.'\n    ],\n    answers: {\n      elements: {\n        ac_units: 0,\n        antennas: 0,\n        pipes: 0,\n        cables: 0,\n        gutters: 0,\n        solar_panels: 0\n      },\n      images: { fachada: 0, cubierta: 0 }\n    }\n  };\n}\nconst item = items[0];\nconst incoming = item.json.body || item.json;\nconst phone = incoming.from || incoming.sender || incoming.wa_id || 'desconocido';\nconst rawState = item.json.estadoSesion as string | undefined;\nlet state: ConversacionState = rawState ? JSON.parse(rawState) : defaultState();\nconst messageType = incoming.type || item.json.type || 'text';\nconst result = {\n  action: 'ask',\n  reply: '',\n  state,\n  phone,\n  incoming,\n  needsValidation: false,\n  requiresPhotos: false,\n  logLevel: 'info'\n};\nfunction avanzarPregunta() {\n  state.step += 1;\n  if (state.step < state.questions.length) {\n    state.ultimaPregunta = state.questions[state.step];\n    result.reply = state.questions[state.step];\n  } else {\n    state.ultimaPregunta = undefined;\n    result.reply = 'Gracias, estoy recopilando la información y preparando el presupuesto.';\n    result.action = 'calcular';\n  }\n}\nif (state.awaitingConfirmation) {\n  const texto = (incoming.text?.body || incoming.message || '').trim().toLowerCase();\n  if (texto.includes('si')) {\n    result.reply = 'Perfecto, estoy creando el presupuesto en Odoo.';\n    result.action = 'crear_odoo';\n  } else if (texto.includes('no')) {\n    result.reply = 'Sin problema, puedes solicitar cambios o pedirnos que lo creemos más adelante.';\n    result.action = 'fin';\n  } else {\n    result.reply = '¿Deseas que creemos el presupuesto en Odoo? Responde con \"Sí\" o \"No\".';\n  }\n  return [{ json: result }];\n}\nif (messageType === 'image') {\n  state.answers.images = state.answers.images || { fachada: 0, cubierta: 0 };\n  const caption = (incoming.image?.caption || '').toLowerCase();\n  if (caption.includes('fachada')) {\n    state.answers.images.fachada += 1;\n  } else if (caption.includes('cubierta')) {\n    state.answers.images.cubierta += 1;\n  } else {\n    if (state.answers.images.fachada < 2) {\n      state.answers.images.fachada += 1;\n    } else {\n      state.answers.images.cubierta += 1;\n    }\n  }\n  result.reply = 'Foto recibida, gracias. Continúa enviando el resto si aún faltan.';\n  if (state.answers.images.fachada >= 2 && state.answers.images.cubierta >= 1 && state.step < 4) {\n    state.step = 4;\n    avanzarPregunta();\n  } else {\n    result.action = 'registrar_imagen';\n  }\n  result.state = state;\n  return [{ json: result }];\n}\nif (messageType === 'document') {\n  result.reply = 'He recibido tu archivo. Si es una foto, por favor envíala como imagen para poder procesarla.';\n  result.action = 'solo_respuesta';\n  result.state = state;\n  return [{ json: result }];\n}\nconst texto = (incoming.text?.body || incoming.message || '').trim();\nif (!texto) {\n  result.reply = 'No pude leer el mensaje, ¿podrías repetirlo?';\n  result.state = state;\n  return [{ json: result }];\n}\nswitch (state.step) {\n  case 0: {\n    result.state = state;\n    result.action = 'validar_perimetro';\n    result.value = texto;\n    result.question = state.questions[state.step];\n    result.needsValidation = true;\n    break;\n  }\n  case 1: {\n    result.state = state;\n    result.action = 'validar_fachada';\n    result.value = texto;\n    result.question = state.questions[state.step];\n    result.needsValidation = true;\n    break;\n  }\n  case 2: {\n    result.state = state;\n    result.action = 'validar_alturas';\n    result.value = texto;\n    result.question = state.questions[state.step];\n    result.needsValidation = true;\n    break;\n  }\n  case 3: {\n    result.state = state;\n    result.action = 'validar_elementos';\n    result.value = texto;\n    result.question = state.questions[state.step];\n    result.needsValidation = true;\n    break;\n  }\n  case 4: {\n    result.reply = 'Necesito al menos 2 fotos de fachada (frontal/lateral) y 1 de cubierta.';\n    result.action = 'solicitar_fotos';\n    result.requiresPhotos = true;\n    break;\n  }\n  default: {\n    result.reply = 'Estoy repasando la información para generar el presupuesto.';\n    result.action = 'calcular';\n    break;\n  }\n}\nreturn [{ json: result }];\n"
+      },
+      "id": "FSMEstados",
+      "name": "FSM Estados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Valida entradas numéricas y consistencia.\nconst item = items[0];\nconst data = item.json;\nconst state = data.state;\nconst respuesta = { ...data };\nif (!data.needsValidation) {\n  return [{ json: respuesta }];\n}\nconst valorTexto = String(data.value || '').replace(',', '.');\nconst numero = Number(valorTexto);\nconst error = (mensaje: string) => {\n  respuesta.reply = mensaje;\n  respuesta.action = 'reintentar';\n  respuesta.logLevel = 'warn';\n  return [{ json: respuesta }];\n};\nswitch (data.action) {\n  case 'validar_perimetro': {\n    if (!isFinite(numero) || numero <= 0) {\n      return error('El perímetro debe ser un número mayor que 0. Intenta de nuevo, por favor.');\n    }\n    state.answers.perimeter_roof_m = Number(numero.toFixed(2));\n    break;\n  }\n  case 'validar_fachada': {\n    if (!isFinite(numero) || numero <= 0) {\n      return error('La superficie de fachada debe ser positiva.');\n    }\n    state.answers.facade_area_m2 = Number(numero.toFixed(2));\n    if (state.answers.heights && state.answers.facade_area_m2 < (state.answers.perimeter_roof_m || 0) * state.answers.heights * 2) {\n      respuesta.reply = 'Revisa si la superficie de fachada es correcta respecto al perímetro y las alturas. ¿Puedes confirmarla?';\n      respuesta.action = 'confirmar_valor';\n      return [{ json: respuesta }];\n    }\n    break;\n  }\n  case 'validar_alturas': {\n    if (!Number.isInteger(numero) || numero <= 0) {\n      return error('Las alturas deben ser un número entero mayor que 0.');\n    }\n    state.answers.heights = Number(numero);\n    if (state.answers.facade_area_m2 && state.answers.facade_area_m2 < (state.answers.perimeter_roof_m || 0) * state.answers.heights * 2) {\n      respuesta.reply = 'La superficie de fachada parece baja para las alturas indicadas. ¿Podrías revisarla?';\n      respuesta.action = 'confirmar_valor';\n      return [{ json: respuesta }];\n    }\n    break;\n  }\n  case 'validar_elementos': {\n    const elementos: any = { ...state.answers.elements };\n    const partes = valorTexto.split(/[,;]+/).map(p => p.trim());\n    for (const parte of partes) {\n      const match = parte.match(/(aires?|ac|clima|antenas?|canaletas?|tuber(?:ías|ias)|cables?|placas?|solares?|gutters?)[^0-9]*([0-9]+)/i);\n      if (match) {\n        const tipo = match[1].toLowerCase();\n        const cantidad = Number(match[2]);\n        if (tipo.includes('aire') || tipo.includes('ac') || tipo.includes('clima')) elementos.ac_units = (elementos.ac_units || 0) + cantidad;\n        else if (tipo.includes('antena')) elementos.antennas = (elementos.antennas || 0) + cantidad;\n        else if (tipo.includes('canalet')) elementos.gutters = (elementos.gutters || 0) + cantidad;\n        else if (tipo.includes('tuber')) elementos.pipes = (elementos.pipes || 0) + cantidad;\n        else if (tipo.includes('cable')) elementos.cables = (elementos.cables || 0) + cantidad;\n        else if (tipo.includes('placa') || tipo.includes('solar')) elementos.solar_panels = (elementos.solar_panels || 0) + cantidad;\n      }\n    }\n    state.answers.elements = elementos;\n    break;\n  }\n  default:\n    break;\n}\nrespuesta.state = state;\nrespuesta.needsValidation = false;\nreturn [{ json: respuesta }];\n"
+      },
+      "id": "ValidadorDatos",
+      "name": "Validador de Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "command": "set",
+        "key": "={{'session:' + $json.phone}}",
+        "value": "={{JSON.stringify($json.state)}}"
+      },
+      "id": "RedisGuardarEstado",
+      "name": "Guardar Estado Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        -120
+      ],
+      "credentials": {
+        "redis": {
+          "id": "={{$env.REDIS_CRED_ID}}",
+          "name": "Redis Principal"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "propertyName": "={{$json.action}}",
+        "rules": {
+          "rules": [
+            {
+              "value": "ask",
+              "operation": "equal"
+            },
+            {
+              "value": "reintentar",
+              "operation": "equal"
+            },
+            {
+              "value": "confirmar_valor",
+              "operation": "equal"
+            },
+            {
+              "value": "solicitar_fotos",
+              "operation": "equal"
+            },
+            {
+              "value": "registrar_imagen",
+              "operation": "equal"
+            },
+            {
+              "value": "calcular",
+              "operation": "equal"
+            },
+            {
+              "value": "fin",
+              "operation": "equal"
+            },
+            {
+              "value": "crear_odoo",
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "id": "RouterAccion",
+      "name": "Router Acción",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.WA_API_URL}}",
+        "authentication": "predefinedCredentialType",
+        "jsonParameters": true,
+        "options": {
+          "retry": {
+            "maxAttempts": 3,
+            "waitBetweenRetries": 2000
+          }
+        },
+        "body": "={\n  \"to\": $json.phone,\n  \"type\": \"text\",\n  \"text\": {\n    \"preview_url\": false,\n    \"body\": $json.reply\n  }\n}"
+      },
+      "id": "ResponderWhatsApp",
+      "name": "Responder WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "={{$env.WA_CRED_ID}}",
+          "name": "WhatsApp Gateway"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$json.incoming.image?.url || $json.body.image?.url}}",
+        "responseFormat": "file",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "DescargaFoto",
+      "name": "Descargar Foto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.S3_ENDPOINT}}/{{$env.S3_BUCKET}}/{{$json.phone}}/{{Date.now()}}.jpg",
+        "method": "PUT",
+        "sendBinaryData": true,
+        "binaryProperty": "data",
+        "options": {
+          "headers": {
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "image/jpeg"
+              }
+            ]
+          },
+          "retry": {
+            "maxAttempts": 3,
+            "waitBetweenRetries": 2000
+          }
+        }
+      },
+      "id": "GuardarBinario",
+      "name": "Guardar Binario S3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.VISION_URL}}",
+        "authentication": "predefinedCredentialType",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 40000
+        },
+        "body": "={\n  \"image_url\": $json.headers.location || $json.responseHeaders['Location'] || $json.request.url,\n  \"metadata\": {\n    \"phone\": $json.phone,\n    \"session\": '={{$json.phone}}'\n  }\n}"
+      },
+      "id": "VisionAPI",
+      "name": "Visión Artificial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "={{$env.VISION_CRED_ID}}",
+          "name": "Vision Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.CATASTRO_URL}}",
+        "authentication": "none",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "direccion",
+              "value": "={{$json.state.answers.direccion || ''}}"
+            },
+            {
+              "name": "lat",
+              "value": "={{$json.state.answers.lat || ''}}"
+            },
+            {
+              "name": "lng",
+              "value": "={{$json.state.answers.lng || ''}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "CatastroHTTP",
+      "name": "Consulta Catastro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Combina datos de usuario, visión y catastro para cálculos.\ninterface VisionEstimacion {\n  facade_area_est?: number;\n  openings_area_est?: number;\n  ac_units?: number;\n  pipes?: number;\n  cables?: number;\n  gutters?: number;\n  solar_panels?: number;\n  annotations?: any;\n}\ninterface Elementos {\n  ac_units: number;\n  antennas: number;\n  pipes: number;\n  cables: number;\n  gutters: number;\n  solar_panels: number;\n}\ninterface CapituloLinea {\n  codigo: string;\n  concepto: string;\n  unidad: string;\n  cantidad: number;\n  largo?: number;\n  ancho?: number;\n  alto?: number;\n  precio: number;\n  importe: number;\n  notas?: string;\n}\ninterface Capitulo {\n  code: string;\n  name: string;\n  lines: CapituloLinea[];\n  subtotal: number;\n}\nconst config = {\n  visionWeight: 0.6,\n  usuarioWeight: 0.4,\n  alturaPlanta: 3.0,\n  alturaAlero: 0.6,\n  k: {\n    andamio_ml: 35,\n    sate_m2: 62,\n    desmontaje_elemento: 45,\n    canaleta_ml: 18,\n    vierteaguas_ml: 22,\n    panel_sandwich_m2: 68,\n    teja_m2: 45,\n    gestion_residuos_m3: 28,\n    seguridad_salud: 0.03\n  }\n};\nconst item = items[0];\nconst data = item.json;\nconst state = data.state;\nconst vision: VisionEstimacion = data.vision || {};\nconst catastro = data.catastro || {};\nconst answers = state.answers;\nconst elementos: Elementos = answers.elements || {\n  ac_units: 0,\n  antennas: 0,\n  pipes: 0,\n  cables: 0,\n  gutters: 0,\n  solar_panels: 0\n};\nconst fusion = (visionValue?: number, userValue?: number) => {\n  if (visionValue && userValue) {\n    return Number((visionValue * config.visionWeight + userValue * config.usuarioWeight).toFixed(2));\n  }\n  return Number((visionValue || userValue || 0).toFixed(2));\n};\nconst perimeter = catastro.perimeter_ref || answers.perimeter_roof_m || 0;\nconst heights = catastro.heights_ref || answers.heights || 1;\nconst fachadaVisible = fusion(vision.facade_area_est, answers.facade_area_m2);\nconst huecos = vision.openings_area_est || 0;\nconst facadeNet = Number(Math.max(fachadaVisible - huecos, 0).toFixed(2));\nconst totalElementos: Elementos = {\n  ac_units: Math.max(elementos.ac_units, vision.ac_units || 0),\n  antennas: elementos.antennas,\n  pipes: Math.max(elementos.pipes, vision.pipes || 0),\n  cables: Math.max(elementos.cables, vision.cables || 0),\n  gutters: Math.max(elementos.gutters, vision.gutters || 0),\n  solar_panels: Math.max(elementos.solar_panels, vision.solar_panels || 0)\n};\nconst alturaLineal = heights * config.alturaPlanta + config.alturaAlero;\nconst andamioML = perimeter;\nconst andamioM2 = Number((andamioML * alturaLineal).toFixed(2));\nconst sateM2 = facadeNet;\nconst cubiertaM2 = Number((perimeter * config.alturaPlanta).toFixed(2));\nconst residuosM3 = Number((sateM2 * 0.02 + cubiertaM2 * 0.01).toFixed(2));\nconst lineas: Capitulo[] = [];\nfunction crearCapitulo(code: string, name: string): Capitulo {\n  const cap: Capitulo = { code, name, lines: [], subtotal: 0 };\n  lineas.push(cap);\n  return cap;\n}\nfunction agregarLinea(cap: Capitulo, linea: CapituloLinea) {\n  linea.importe = Number((linea.cantidad * linea.precio).toFixed(2));\n  cap.lines.push(linea);\n  cap.subtotal = Number((cap.subtotal + linea.importe).toFixed(2));\n}\nconst cap01 = crearCapitulo('01', 'MEDIOS AUXILIARES');\nagregarLinea(cap01, { codigo: '01.01', concepto: 'Andamio modular UNE 12810/11 montado y desmontado', unidad: 'm²', cantidad: andamioM2, precio: config.k.andamio_ml });\nagregarLinea(cap01, { codigo: '01.02', concepto: 'Descuelgue vertical con línea de vida', unidad: 'ml', cantidad: perimeter, precio: 14 });\nagregarLinea(cap01, { codigo: '01.03', concepto: 'Dirección facultativa y coordinación de seguridad', unidad: 'ud', cantidad: 1, precio: 850 });\nconst cap02 = crearCapitulo('02', 'REHABILITACIÓN DE FACHADA – SATE');\nagregarLinea(cap02, { codigo: '02.01', concepto: 'Sistema SATE EPS 100 mm acabado acrílico', unidad: 'm²', cantidad: sateM2, precio: config.k.sate_m2 });\nagregarLinea(cap02, { codigo: '02.02', concepto: 'Protecciones y recogidas previas', unidad: 'm²', cantidad: sateM2, precio: 4.5 });\nagregarLinea(cap02, { codigo: '02.03', concepto: 'Desmontaje y montaje unidades climatización', unidad: 'ud', cantidad: totalElementos.ac_units, precio: config.k.desmontaje_elemento });\nagregarLinea(cap02, { codigo: '02.04', concepto: 'Desmontaje y montaje antenas/toldos/canaletas', unidad: 'ud', cantidad: totalElementos.antennas + totalElementos.gutters, precio: 32 });\nagregarLinea(cap02, { codigo: '02.05', concepto: 'Canaleta PVC/electricidad', unidad: 'ml', cantidad: totalElementos.cables, precio: config.k.canaleta_ml });\nagregarLinea(cap02, { codigo: '02.06', concepto: 'Revestimiento vierteaguas aluminio lacado', unidad: 'ml', cantidad: perimeter, precio: config.k.vierteaguas_ml });\nagregarLinea(cap02, { codigo: '02.07', concepto: 'Sellado y esmaltado de carpinterías y encuentros', unidad: 'ml', cantidad: perimeter * heights, precio: 9 });\nconst cap03 = crearCapitulo('03', 'REHABILITACIÓN DE CUBIERTA');\nagregarLinea(cap03, { codigo: '03.01', concepto: 'Desmontaje de teja cerámica', unidad: 'm²', cantidad: cubiertaM2, precio: config.k.teja_m2 });\nagregarLinea(cap03, { codigo: '03.02', concepto: 'Suministro e instalación panel sándwich 60 mm', unidad: 'm²', cantidad: cubiertaM2, precio: config.k.panel_sandwich_m2 });\nagregarLinea(cap03, { codigo: '03.03', concepto: 'Ejecución limas, albardillas y remates', unidad: 'ml', cantidad: perimeter, precio: 38 });\nagregarLinea(cap03, { codigo: '03.04', concepto: 'Revisión y sellado de claraboyas/solar', unidad: 'ud', cantidad: Math.max(totalElementos.solar_panels, 1), precio: 55 });\nagregarLinea(cap03, { codigo: '03.05', concepto: 'Pruebas de servicio y estanqueidad', unidad: 'ud', cantidad: 1, precio: 220 });\nconst cap04 = crearCapitulo('04', 'INTERVENCIÓN SOBRE PLANTA BAJA');\nagregarLinea(cap04, { codigo: '04.01', concepto: 'Aislamiento de vuelos/paso peatonal', unidad: 'm²', cantidad: Math.min(80, sateM2 * 0.1), precio: 54 });\nagregarLinea(cap04, { codigo: '04.02', concepto: 'Saneado y pintura intumescente', unidad: 'm²', cantidad: Math.min(120, sateM2 * 0.12), precio: 18 });\nagregarLinea(cap04, { codigo: '04.03', concepto: 'Acondicionamiento de accesos y señalización', unidad: 'ud', cantidad: 1, precio: 180 });\nconst cap05 = crearCapitulo('05', 'GESTIÓN DE RESIDUOS');\nagregarLinea(cap05, { codigo: '05.01', concepto: 'Retirada y transporte a gestor autorizado', unidad: 'm³', cantidad: residuosM3, precio: config.k.gestion_residuos_m3 });\nagregarLinea(cap05, { codigo: '05.02', concepto: 'Tasas y canon de vertedero', unidad: 'm³', cantidad: residuosM3, precio: 9 });\nconst cap06 = crearCapitulo('06', 'SEGURIDAD Y SALUD');\nagregarLinea(cap06, { codigo: '06.01', concepto: 'Plan de seguridad y salud', unidad: 'ud', cantidad: 1, precio: 450 });\nagregarLinea(cap06, { codigo: '06.02', concepto: 'Medios colectivos de protección', unidad: 'm²', cantidad: andamioM2, precio: 6 });\nlet total = lineas.reduce((acc, cap) => acc + cap.subtotal, 0);\nconst seguridad = Number((total * config.k.seguridad_salud).toFixed(2));\nagregarLinea(cap06, { codigo: '06.03', concepto: 'Coste adicional seguridad y salud (3%)', unidad: 'ud', cantidad: 1, precio: seguridad });\ncap06.subtotal = Number(cap06.lines.reduce((s, l) => s + l.importe, 0).toFixed(2));\ntotal = Number(lineas.reduce((acc, cap) => acc + cap.subtotal, 0).toFixed(2));\nreturn [{ json: { ...data, calc: { facade_area_net: facadeNet, chapters: lineas, total, config } } }];\n"
+      },
+      "id": "CalculosPresupuesto",
+      "name": "Cálculos Presupuesto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Renderiza HTML del resumen del presupuesto.\nconst item = items[0];\nconst data = item.json;\nconst calc = data.calc;\nconst chapters = calc.chapters;\nconst fecha = new Date().toLocaleString('es-ES');\nconst filasCapitulos = chapters\n  .map((cap: any) => {\n    const lineas = cap.lines\n      .map((linea: any) => `\n        <tr>\n          <td>${linea.codigo}</td>\n          <td>${linea.concepto}</td>\n          <td>${linea.unidad}</td>\n          <td style=\"text-align:right\">${linea.cantidad.toLocaleString('es-ES', { maximumFractionDigits: 2 })}</td>\n          <td style=\"text-align:right\">${linea.precio.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €</td>\n          <td style=\"text-align:right\">${linea.importe.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €</td>\n        </tr>`).join('');\n    return `\n      <h3>${cap.code} ${cap.name}</h3>\n      <table>\n        <thead>\n          <tr>\n            <th>Código</th>\n            <th>Partida</th>\n            <th>Ud</th>\n            <th>Cantidad</th>\n            <th>P.U.</th>\n            <th>Importe</th>\n          </tr>\n        </thead>\n        <tbody>${lineas}</tbody>\n        <tfoot>\n          <tr>\n            <td colspan=\"5\" style=\"text-align:right\"><strong>Subtotal ${cap.code}</strong></td>\n            <td style=\"text-align:right\"><strong>${cap.subtotal.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €</strong></td>\n          </tr>\n        </tfoot>\n      </table>`;\n  })\n  .join('');\nconst html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\" />\n<title>Presupuesto rehabilitación</title>\n<style>\nbody { font-family: Arial, sans-serif; margin: 32px; color: #1d1d1f; }\nh1, h2, h3 { color: #10375c; }\ntable { width: 100%; border-collapse: collapse; margin-bottom: 24px; }\nth, td { border: 1px solid #d0d0d0; padding: 8px; font-size: 13px; }\nth { background: #f5f8fb; text-align: left; }\n.summary { background: #eef6ff; padding: 16px; border-radius: 8px; margin-bottom: 24px; }\nsmall { color: #5f5f5f; }\n</style>\n</head>\n<body>\n  <h1>Resumen presupuesto eficiencia energética</h1>\n  <p><small>Generado el ${fecha} · Sesión ${data.phone}</small></p>\n  <section class=\"summary\">\n    <p><strong>Perímetro cubierta:</strong> ${data.state.answers.perimeter_roof_m} m</p>\n    <p><strong>Superficie fachada neta:</strong> ${calc.facade_area_net} m²</p>\n    <p><strong>Alturas:</strong> ${data.state.answers.heights} plantas</p>\n    <p><strong>Total ejecución material:</strong> ${calc.total.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €</p>\n  </section>\n  ${filasCapitulos}\n  <h2>Total ejecución material: ${calc.total.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €</h2>\n  <p>Notas: precios orientativos sujetos a visita técnica y confirmación de mediciones. Incluye visión artificial (${data.calc.config.visionWeight * 100}% peso) y datos del usuario (${data.calc.config.usuarioWeight * 100}%).</p>\n</body>\n</html>`;\nreturn [{ json: { ...data, html } }];\n"
+      },
+      "id": "RenderHTML",
+      "name": "Render Presupuesto HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.PDF_API_URL}}",
+        "jsonParameters": true,
+        "body": "={\n  \"html\": $json.html,\n  \"fileName\": `presupuesto-${$json.phone}.pdf`\n}"
+      },
+      "id": "HTMLaPDF",
+      "name": "Convertir a PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.S3_ENDPOINT}}/{{$env.S3_BUCKET}}/presupuestos/{{Date.now()}}-{{$json.phone}}.html",
+        "sendBody": true,
+        "options": {
+          "headers": {
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        },
+        "body": "={{$json.html}}"
+      },
+      "id": "GuardarHTML",
+      "name": "Guardar HTML en S3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "command": "set",
+        "key": "={{'trace:' + $json.phone + ':' + Date.now()}}",
+        "value": "={{JSON.stringify({ input: $json.state.answers, vision: $json.vision, catastro: $json.catastro, calc: $json.calc, version: '1.0.0' })}}"
+      },
+      "id": "LogResultado",
+      "name": "Log Resultado en Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        -60
+      ],
+      "credentials": {
+        "redis": {
+          "id": "={{$env.REDIS_CRED_ID}}",
+          "name": "Redis Principal"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Prepara mensaje resumen y enlaces para WhatsApp.\nconst item = items[0];\nconst data = item.json;\nconst pdfUrl = data.body?.url || data.pdfUrl || data.responseData?.url || 'https://example.com/presupuesto.pdf';\nconst htmlUrl = data.headers?.location || data.responseHeaders?.Location || 'https://example.com/presupuesto.html';\nconst mensaje = `Aquí tienes el resumen de tu presupuesto. Total ejecución material: ${data.calc.total.toLocaleString('es-ES', { maximumFractionDigits: 2 })} €.\nDescarga detalle PDF: ${pdfUrl}\nDetalle HTML: ${htmlUrl}\n¿Quieres que lo cree en Odoo y te lo enviemos por email/WhatsApp?`;\nreturn [{ json: { ...data, reply: mensaje, action: 'solicitar_confirmacion' } }];\n"
+      },
+      "id": "PrepararMensajeFinal",
+      "name": "Preparar Mensaje Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "language": "TypeScript",
+        "jsCode": "// Lógica de autenticación y creación de presupuesto en Odoo 17 vía JSON-RPC oficial.\nconst item = items[0];\nconst data = item.json;\nconst cred = {\n  url: $env.ODOO_URL as string,\n  db: $env.ODOO_DB as string,\n  login: $env.ODOO_LOGIN as string,\n  password: $env.ODOO_PASSWORD_OR_APIKEY as string\n};\nconst orderPayload = {\n  partner_id: data.state.answers.partner_id || data.incoming.contact_id || 1,\n  client_order_ref: `WA-${data.phone}-${Date.now()}`,\n  note: 'Generado automáticamente desde flujo n8n eficiencia energética',\n  x_vision_ref: data.vision || {},\n  validity_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().substring(0, 10)\n};\nconst headers = { 'Content-Type': 'application/json' };\nconst request = async (payload: any) => {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `${cred.url}/jsonrpc`,\n    headers,\n    body: payload,\n    json: true,\n    timeout: 10000\n  });\n  if (response.error) {\n    throw new Error(response.error.data?.message || response.error.message || 'Error desconocido en Odoo');\n  }\n  return response.result;\n};\nasync function crearPresupuesto() {\n  const uid = await request({\n    jsonrpc: '2.0',\n    method: 'call',\n    params: { service: 'common', method: 'login', args: [cred.db, cred.login, cred.password] },\n    id: Date.now()\n  });\n  if (!uid) throw new Error('No se pudo autenticar en Odoo');\n  const orderId = await request({\n    jsonrpc: '2.0',\n    method: 'call',\n    params: {\n      service: 'object',\n      method: 'execute_kw',\n      args: [cred.db, uid, cred.password, 'sale.order', 'create', [orderPayload]]\n    },\n    id: Date.now() + 1\n  });\n  const lineas = data.calc.chapters.flatMap((cap: any) => {\n    const sectionLine = {\n      display_type: 'line_section',\n      name: `${cap.code} ${cap.name}`,\n      order_id: orderId\n    };\n    const partidas = cap.lines.map((linea: any) => ({\n      name: `${linea.codigo} ${linea.concepto}`,\n      product_uom_qty: linea.cantidad,\n      price_unit: linea.precio,\n      product_uom: 1,\n      order_id: orderId\n    }));\n    return [sectionLine, ...partidas];\n  });\n  for (const linea of lineas) {\n    await request({\n      jsonrpc: '2.0',\n      method: 'call',\n      params: {\n        service: 'object',\n        method: 'execute_kw',\n        args: [cred.db, uid, cred.password, 'sale.order.line', 'create', [linea]]\n      },\n      id: Date.now() + Math.floor(Math.random() * 1000)\n    });\n  }\n  return orderId;\n}\nreturn crearPresupuesto()\n  .then(orderId => [{ json: { ...data, odooOrderId: orderId, reply: `Presupuesto creado en Odoo con ID ${orderId}. Te enviaremos copia por email.`, action: 'fin' } }])\n  .catch(error => [{ json: { ...data, reply: `Odoo devolvió un error: ${error.message}. ¿Probamos de nuevo más tarde?`, action: 'error' } }]);\n"
+      },
+      "id": "OdooCrearPresupuesto",
+      "name": "Crear Presupuesto Odoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Entrada WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Router Tipo Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router Tipo Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Estado desde Redis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descargar Foto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descargar Foto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estado desde Redis": {
+      "main": [
+        [
+          {
+            "node": "FSM Estados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FSM Estados": {
+      "main": [
+        [
+          {
+            "node": "Validador de Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validador de Datos": {
+      "main": [
+        [
+          {
+            "node": "Guardar Estado Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Estado Redis": {
+      "main": [
+        [
+          {
+            "node": "Router Acción",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router Acción": {
+      "main": [
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descargar Foto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consulta Catastro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crear Presupuesto Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Foto": {
+      "main": [
+        [
+          {
+            "node": "Guardar Binario S3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Binario S3": {
+      "main": [
+        [
+          {
+            "node": "Visión Artificial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Visión Artificial": {
+      "main": [
+        [
+          {
+            "node": "Estado desde Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consulta Catastro": {
+      "main": [
+        [
+          {
+            "node": "Cálculos Presupuesto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cálculos Presupuesto": {
+      "main": [
+        [
+          {
+            "node": "Render Presupuesto HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Presupuesto HTML": {
+      "main": [
+        [
+          {
+            "node": "Convertir a PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guardar HTML en S3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar HTML en S3": {
+      "main": [
+        [
+          {
+            "node": "Preparar Mensaje Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convertir a PDF": {
+      "main": [
+        [
+          {
+            "node": "Log Resultado en Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Resultado en Redis": {
+      "main": [
+        [
+          {
+            "node": "Preparar Mensaje Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Mensaje Final": {
+      "main": [
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "PresupuestoEficienciaWhatsApp"
+}
