@@ -1,0 +1,196 @@
+{
+  "name": "Agente IA Presupuestos y Valoraciones",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["messages"],
+        "options": {}
+      },
+      "id": "trigger",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [-960, 320],
+      "webhookId": "TRIGGER-UUID-REPLACE",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "l1oZAIL6uFnIFVcq",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'session:' + ($json.messages?.[0]?.from || $json.body?.from || $json.from || $json.phone) }}"
+      },
+      "id": "redis_get",
+      "name": "Cargar estado",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [-656, 320],
+      "credentials": {
+        "redis": {
+          "id": "uUALR6mzUYb59fEr",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $('WhatsApp Trigger').item.json || {};\nconst rawState = items[0].json?.value ? JSON.parse(items[0].json.value) : null;\nconst state = rawState || {\n  mode: null,\n  step: 0,\n  answers: {\n    address: '',\n    perimeter: null,\n    facade: null,\n    heights: null,\n    neighbors: null,\n    price_m2: null,\n    elements: [],\n    photos: { fachada: 0, medianeras: 0, terraza: 0, cubierta: 0 },\n    windows_m2: 0,\n    terraces_m2: 0\n  },\n  confirmations: { catastro: false, resumen: false },\n  summary: null,\n  documents: []\n};\n\nconst msg = incoming.messages?.[0] || incoming.body || incoming;\nconst text = String(msg?.text?.body || '').trim();\nconst type = msg?.type || (msg?.image ? 'image' : 'text');\nconst reply = { action: 'ask', text: '', requiresPhotos: false, state, documents: [] };\nconst lower = text.toLowerCase();\n\nfunction ensureMode(){\n  if(state.mode) return;\n  if(/presupuesto|aislamiento|sate/.test(lower)) state.mode='presupuesto';\n  else if(/valoraci[óo]n|valuaci|precio/.test(lower)) state.mode='valoracion';\n}\n\nfunction askNext(){\n  const qVal = [\n    'Para la valoración necesito la dirección completa.',\n    '¿Cuál es el perímetro exterior en metros?',\n    '¿Cuál es la superficie de fachada (m²)?',\n    '¿Cuántas alturas tiene el edificio?',\n    '¿Cuántas viviendas o vecinos hay?',\n    '¿Qué precio por metro cuadrado debemos usar?'\n  ];\n  const qPre = [\n    'Para empezar, dime la dirección completa.',\n    'Indica el perímetro exterior en metros.',\n    'Indica la superficie de fachada en m².',\n    '¿Cuántas alturas tiene el edificio?',\n    '¿Cuántos vecinos o viviendas hay?',\n    'Lista los elementos a desmontar (aires, antenas, tuberías, cables, canaletas, placas solares).',\n    'Necesito la foto de la fachada 1 indicando si es medianera.',\n    'Foto de la fachada 2.',\n    'Foto de la fachada 3.',\n    'Foto de la fachada 4 (indica si es medianera).',\n    'Si hay terrazas cerradas envía foto y superficie, si no responde "no".',\n    'Por último, envía una foto de la cubierta.'\n  ];\n  const questions = state.mode === 'valoracion' ? qVal : qPre;\n  if(state.step < questions.length){\n    reply.text = questions[state.step];\n    reply.requiresPhotos = state.step >= 6 && state.mode === 'presupuesto';\n    return true;\n  }\n  return false;\n}\n\nfunction fakeCatastroLookup(address){\n  return {\n    perimeter: 120,\n    facade: 480,\n    heights: 4,\n    neighbors: 16,\n    ref: 'FAKE-REF-1234'\n  };\n}\n\nfunction buildResumen(){\n  const ans = state.answers;\n  const lines = [\n    `Dirección: ${ans.address || '—'}`,\n    `Perímetro: ${ans.perimeter ?? '—'} m`,\n    `Fachada: ${ans.facade ?? '—'} m²`,\n    `Alturas: ${ans.heights ?? '—'}`,\n    `Vecinos: ${ans.neighbors ?? '—'}`\n  ];\n  if(state.mode === 'valoracion') lines.push(`Precio m²: ${ans.price_m2 ?? '—'}`);\n  if(state.mode === 'presupuesto'){\n    lines.push(`Fotos fachada recibidas: ${ans.photos.fachada}`);\n    lines.push(`Fotos medianeras marcadas: ${ans.photos.medianeras}`);\n    lines.push(`Fotos terrazas: ${ans.photos.terraza}`);\n    lines.push(`Fotos cubierta: ${ans.photos.cubierta}`);\n  }\n  state.summary = lines.join('\n');\n  return state.summary;\n}\n\nif(type === 'image'){\n  state.answers.photos.fachada += 1;\n  reply.text = 'Foto recibida. Si corresponde a una medianera responde "medianera".';\n  reply.requiresPhotos = false;\n  state.step = Math.min(state.step + 1, state.mode === 'presupuesto' ? 12 : state.step);\n  return [{ json: reply }];\n}\n\nensureMode();\nif(!state.mode){\n  reply.text = '¿Quieres iniciar un presupuesto de fachada/cubierta o una valoración?';\n  return [{ json: reply }];\n}\n\nif(!text){\n  askNext();\n  return [{ json: reply }];\n}\n\nif(state.mode === 'valoracion'){\n  switch(state.step){\n    case 0:\n      state.answers.address = text;\n      const datos = fakeCatastroLookup(text);\n      state.answers.perimeter = datos.perimeter;\n      state.answers.facade = datos.facade;\n      state.answers.heights = datos.heights;\n      state.answers.neighbors = datos.neighbors;\n      state.confirmations.catastro = true;\n      reply.text = `He consultado Catastro (ref ${datos.ref}).\nPerímetro ${datos.perimeter} m, fachada ${datos.facade} m², alturas ${datos.heights}, vecinos ${datos.neighbors}. ¿Quieres ajustar alguno?`;\n      state.summary = buildResumen();\n      state.step = 1;\n      return [{ json: reply }];\n    case 1:\n      state.answers.perimeter = Number(text.replace(',', '.')) || state.answers.perimeter;\n      state.step++; break;\n    case 2:\n      state.answers.facade = Number(text.replace(',', '.')) || state.answers.facade;\n      state.step++; break;\n    case 3:\n      state.answers.heights = parseInt(text, 10) || state.answers.heights;\n      state.step++; break;\n    case 4:\n      state.answers.neighbors = parseInt(text, 10) || state.answers.neighbors;\n      state.step++; break;\n    case 5:\n      state.answers.price_m2 = Number(text.replace(',', '.')) || state.answers.price_m2;\n      state.step++; break;\n    default:\n      state.step++;\n  }\n  if(state.step >= 6){\n    const valor = (state.answers.facade || 0) * (state.answers.price_m2 || 0);\n    reply.text = `${buildResumen()}\nValoración estimada: ${valor.toFixed(2)} €. ¿Generamos el PDF y lo cargamos en Odoo?`;
+    state.documents = [{ type: 'valoracion', total: valor }];
+  } else {
+    askNext();
+  }
+  return [{ json: reply }];
+}
+
+// Presupuesto
+switch(state.step){
+  case 0:
+    state.answers.address = text;
+    const datos = fakeCatastroLookup(text);
+    state.answers.perimeter = datos.perimeter;
+    state.answers.facade = datos.facade;
+    state.answers.heights = datos.heights;
+    state.answers.neighbors = datos.neighbors;
+    reply.text = `RC ${datos.ref}. Tomo perímetro ${datos.perimeter} m y fachada ${datos.facade} m². Ajusta si es necesario.`;
+    state.summary = buildResumen();
+    state.step = 1;
+    return [{ json: reply }];
+  case 1:
+    state.answers.perimeter = Number(text.replace(',', '.')) || state.answers.perimeter;
+    state.step++; break;
+  case 2:
+    state.answers.facade = Number(text.replace(',', '.')) || state.answers.facade;
+    state.step++; break;
+  case 3:
+    state.answers.heights = parseInt(text,10) || state.answers.heights;
+    state.step++; break;
+  case 4:
+    state.answers.neighbors = parseInt(text,10) || state.answers.neighbors;
+    state.step++; break;
+  case 5:
+    state.answers.elements = text.split(/[,;]+/).map(x=>x.trim()).filter(Boolean);
+    state.step++;
+    reply.text = 'Perfecto. Vamos con las fotos de las fachadas.';
+    reply.requiresPhotos = true;
+    return [{ json: reply }];
+  case 10:
+    if(/^no$/i.test(text)){
+      state.answers.terraces_m2 = 0;
+    } else {
+      state.answers.terraces_m2 = Number(text.replace(',', '.')) || state.answers.terraces_m2;
+    }
+    state.step++;
+    askNext();
+    return [{ json: reply }];
+  default:
+    state.step++;
+}
+
+if(state.step >= 12){
+  const areaEfectiva = Math.max((state.answers.facade || 0) - (state.answers.windows_m2 || 0) - (state.answers.terraces_m2 || 0), 0);
+  const costeBase = areaEfectiva * 65; // placeholder
+  reply.text = `${buildResumen()}\nÁrea efectiva tras huecos: ${areaEfectiva.toFixed(2)} m². Coste estimado ${costeBase.toFixed(2)} €. ¿Generamos presupuesto en Odoo y lo enviamos?`;
+  state.documents = [{ type: 'presupuesto', total: costeBase }];
+} else {
+  askNext();
+}
+
+return [{ json: reply }];
+"
+      },
+      "id": "agent",
+      "name": "Agente Maestro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 320]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'session:' + ($('WhatsApp Trigger').item.json.messages[0].from) }}",
+        "value": "={{ $json.state ? JSON.stringify($json.state) : '' }}"
+      },
+      "id": "redis_set",
+      "name": "Guardar estado",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [-176, 320],
+      "credentials": {
+        "redis": {
+          "id": "uUALR6mzUYb59fEr",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "766013233264996",
+        "recipientPhoneNumber": "={{ $('WhatsApp Trigger').item.json.messages[0].from }}",
+        "textBody": "={{ $json.text || '¿Podrías repetirlo?' }}"
+      },
+      "id": "send_text",
+      "name": "Enviar respuesta",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [32, 320],
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Cargar estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cargar estado": {
+      "main": [
+        [
+          {
+            "node": "Agente Maestro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente Maestro": {
+      "main": [
+        [
+          {
+            "node": "Guardar estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar estado": {
+      "main": [
+        [
+          {
+            "node": "Enviar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {}
+}
