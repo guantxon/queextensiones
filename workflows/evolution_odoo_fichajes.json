@@ -1,0 +1,583 @@
+{
+  "name": "Evolution WhatsApp - Odoo Fichajes",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Evolution Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evolution/whatsapp/fichajes",
+        "responseMode": "responseNode"
+      },
+      "notes": "Escucha las notificaciones entrantes de Evolution WhatsApp. Configura la URL generada en Evolution como webhook de mensajes entrantes.",
+      "notesInFlow": true
+    },
+    {
+      "id": "2",
+      "name": "Preparar Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -380,
+        0
+      ],
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\n\nconst rawMessage = (body.message?.text ?? body.message?.body ?? body.text ?? body.body ?? body.message ?? '').toString().trim();\nconst normalizedMessage = rawMessage\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .toLowerCase();\n\nconst phoneRaw = (body.from ?? body.sender ?? body.phone ?? body.contact?.phone ?? body.message?.from ?? '').toString();\nconst phone = phoneRaw.replace(/[^0-9+]/g, '').replace(/^[+]?34/, '').replace(/^0+/, '');\n\nconst keywordsIn = [\n  'entro',\n  'ficho',\n  'ya estoy aqui',\n  'ya llegue',\n  'llegue',\n  'iniciar fichaje'\n];\nconst keywordsOut = [\n  'salgo',\n  'salida',\n  'me voy',\n  'termine',\n  'fichaje salida',\n  'salida fichaje',\n  'sali'\n];\n\nlet action = null;\nif (keywordsIn.some(keyword => normalizedMessage.includes(keyword))) {\n  action = 'check_in';\n} else if (keywordsOut.some(keyword => normalizedMessage.includes(keyword))) {\n  action = 'check_out';\n}\n\nconst employeeDirectory = {\n  '639925869': 42\n};\n\nconst employeeId = employeeDirectory[phone] ?? null;\n\nreturn [\n  {\n    phone,\n    message: rawMessage,\n    normalizedMessage,\n    action,\n    employeeId,\n    receivedAt: new Date().toISOString()\n  }\n];"
+      },
+      "notes": "Normaliza el payload recibido, mapea el número de teléfono al empleado de Odoo (actualiza el diccionario employeeDirectory según tus empleados) y detecta si el mensaje corresponde a una entrada o salida de fichaje.",
+      "notesInFlow": true
+    },
+    {
+      "id": "3",
+      "name": "¿Número Autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.phone}}",
+              "operation": "equal",
+              "value2": "639925869"
+            }
+          ]
+        }
+      },
+      "notes": "Valida que el fichaje solo se procese para el número autorizado.",
+      "notesInFlow": true
+    },
+    {
+      "id": "4",
+      "name": "Set Respuesta No Autorizado",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        120,
+        -260
+      ],
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "json": [
+            {
+              "name": "webhookResponse",
+              "value": "={{({ status: 'ignored', reason: 'Número no autorizado', phone: $json.phone })}}"
+            }
+          ]
+        }
+      },
+      "notes": "Responde inmediatamente cuando el mensaje proviene de un número no autorizado.",
+      "notesInFlow": true
+    },
+    {
+      "id": "5",
+      "name": "¿Mensaje Reconocido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        120,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "notEmpty"
+            }
+          ]
+        }
+      },
+      "notes": "Comprueba si se encontró una palabra clave de entrada o salida.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6",
+      "name": "Set Respuesta Sin Acción",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        340,
+        -80
+      ],
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "json": [
+            {
+              "name": "webhookResponse",
+              "value": "={{({ status: 'ignored', reason: 'Sin palabras clave de fichaje', phone: $json.phone, message: $json.message })}}"
+            }
+          ]
+        }
+      },
+      "notes": "Devuelve una respuesta informativa cuando el mensaje no contiene palabras clave reconocibles.",
+      "notesInFlow": true
+    },
+    {
+      "id": "7",
+      "name": "Determinar Acción",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        340,
+        140
+      ],
+      "parameters": {
+        "value": "={{$json.action}}",
+        "rules": [
+          {
+            "value": "check_in",
+            "type": "string"
+          },
+          {
+            "value": "check_out",
+            "type": "string"
+          }
+        ]
+      },
+      "notes": "Dirige el flujo hacia la creación de fichaje de entrada o de salida según la palabra clave detectada.",
+      "notesInFlow": true
+    },
+    {
+      "id": "8",
+      "name": "Preparar Entrada",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        580,
+        20
+      ],
+      "parameters": {
+        "values": {
+          "json": [
+            {
+              "name": "attendancePayload",
+              "value": "={{({ employee_id: $json.employeeId, check_in: $json.receivedAt })}}"
+            }
+          ]
+        }
+      },
+      "notes": "Genera el payload que se enviará a Odoo para registrar la entrada.",
+      "notesInFlow": true
+    },
+    {
+      "id": "9",
+      "name": "Crear Fichaje Entrada",
+      "type": "n8n-nodes-base.odoo",
+      "typeVersion": 1,
+      "position": [
+        820,
+        20
+      ],
+      "parameters": {
+        "resource": "record",
+        "operation": "create",
+        "model": "hr.attendance",
+        "dataFieldsUi": {
+          "dataFieldsValues": [
+            {
+              "field": "employee_id",
+              "value": "={{$json.attendancePayload.employee_id}}"
+            },
+            {
+              "field": "check_in",
+              "value": "={{$json.attendancePayload.check_in}}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "odooApi": {
+          "id": "REEMPLAZAR_ODDO_CREDENTIAL_ID",
+          "name": "Odoo - Producción"
+        }
+      },
+      "notes": "Crea el registro de asistencia de entrada en Odoo.",
+      "notesInFlow": true
+    },
+    {
+      "id": "10",
+      "name": "Merge Entrada",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        20
+      ],
+      "parameters": {
+        "mode": "combine"
+      },
+      "notes": "Combina la respuesta de Odoo con los datos originales del mensaje.",
+      "notesInFlow": true
+    },
+    {
+      "id": "11",
+      "name": "Preparar Salida",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        580,
+        260
+      ],
+      "parameters": {
+        "values": {
+          "json": [
+            {
+              "name": "attendancePayload",
+              "value": "={{({ employee_id: $json.employeeId, check_out: $json.receivedAt })}}"
+            }
+          ]
+        }
+      },
+      "notes": "Genera el payload que se enviará a Odoo para registrar la salida.",
+      "notesInFlow": true
+    },
+    {
+      "id": "12",
+      "name": "Crear Fichaje Salida",
+      "type": "n8n-nodes-base.odoo",
+      "typeVersion": 1,
+      "position": [
+        820,
+        260
+      ],
+      "parameters": {
+        "resource": "record",
+        "operation": "create",
+        "model": "hr.attendance",
+        "dataFieldsUi": {
+          "dataFieldsValues": [
+            {
+              "field": "employee_id",
+              "value": "={{$json.attendancePayload.employee_id}}"
+            },
+            {
+              "field": "check_out",
+              "value": "={{$json.attendancePayload.check_out}}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "odooApi": {
+          "id": "REEMPLAZAR_ODDO_CREDENTIAL_ID",
+          "name": "Odoo - Producción"
+        }
+      },
+      "notes": "Crea el registro de asistencia de salida en Odoo.",
+      "notesInFlow": true
+    },
+    {
+      "id": "13",
+      "name": "Merge Salida",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ],
+      "parameters": {
+        "mode": "combine"
+      },
+      "notes": "Combina la respuesta de Odoo con los datos originales del mensaje.",
+      "notesInFlow": true
+    },
+    {
+      "id": "14",
+      "name": "Preparar Confirmaciones",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1240,
+        140
+      ],
+      "parameters": {
+        "functionCode": "const results = []\\n\\nfor (const item of $input.all()) {\\n  const data = item.json;\\n  let phone = data.phone || '';\\n  if (!phone.startsWith('+')) {\\n    phone = `+34${phone}`;\\n  }\\n\\n  const message = data.action === 'check_in'\\n    ? 'Tu fichaje de entrada se ha registrado correctamente en Odoo.'\\n    : 'Tu fichaje de salida se ha registrado correctamente en Odoo.';\\n\\n  results.push({\\n    json: {\\n      ...data,\\n      confirmationMessage: message,\\n      replyPayload: {\\n        to: phone,\\n        message,\\n        metadata: {\\n          source: 'n8n',\\n          action: data.action,\\n          createdAt: new Date().toISOString()\\n        }\\n      },\\n      webhookResponse: {\\n        status: 'success',\\n        action: data.action,\\n        phone,\\n        message,\\n        odooAttendanceId: data.id ?? data.record_id ?? null,\\n        receivedAt: data.receivedAt\\n      }\\n    }\\n  });\\n}\\n\\nreturn results;"
+      },
+      "notes": "Genera el mensaje de confirmación y prepara la respuesta tanto para WhatsApp como para Evolution.",
+      "notesInFlow": true
+    },
+    {
+      "id": "15",
+      "name": "Enviar Respuesta Evolution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1460,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.evolution.com/v1/whatsapp/messages",
+        "jsonParameters": true,
+        "bodyParametersJson": "={{$json.replyPayload}}",
+        "headerParametersJson": "={{({ 'Content-Type': 'application/json', Authorization: $env?.EVOLUTION_API_TOKEN ? `Bearer ${$env.EVOLUTION_API_TOKEN}` : '' })}}"
+      },
+      "notes": "Envía la confirmación al usuario final mediante la API de Evolution. Sustituye la URL y la cabecera Authorization según tu entorno.",
+      "notesInFlow": true
+    },
+    {
+      "id": "16",
+      "name": "Merge Confirmación",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        140
+      ],
+      "parameters": {
+        "mode": "combine"
+      },
+      "notes": "Propaga los datos originales tras enviar la respuesta a Evolution.",
+      "notesInFlow": true
+    },
+    {
+      "id": "17",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1880,
+        40
+      ],
+      "parameters": {
+        "responseBody": "={{$json.webhookResponse}}",
+        "responseCode": 200
+      },
+      "notes": "Cierra la petición HTTP inicial con un JSON informativo para Evolution.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Evolution Webhook": {
+      "main": [
+        [
+          {
+            "node": "Preparar Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Payload": {
+      "main": [
+        [
+          {
+            "node": "¿Número Autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Número Autorizado?": {
+      "main": [
+        [
+          {
+            "node": "¿Mensaje Reconocido?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Respuesta No Autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Respuesta No Autorizado": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Mensaje Reconocido?": {
+      "main": [
+        [
+          {
+            "node": "Determinar Acción",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Respuesta Sin Acción",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Respuesta Sin Acción": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determinar Acción": {
+      "main": [
+        [
+          {
+            "node": "Preparar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Entrada": {
+      "main": [
+        [
+          {
+            "node": "Crear Fichaje Entrada",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Fichaje Entrada": {
+      "main": [
+        [
+          {
+            "node": "Merge Entrada",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Entrada": {
+      "main": [
+        [
+          {
+            "node": "Preparar Confirmaciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Salida": {
+      "main": [
+        [
+          {
+            "node": "Crear Fichaje Salida",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Fichaje Salida": {
+      "main": [
+        [
+          {
+            "node": "Merge Salida",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Salida": {
+      "main": [
+        [
+          {
+            "node": "Preparar Confirmaciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Confirmaciones": {
+      "main": [
+        [
+          {
+            "node": "Enviar Respuesta Evolution",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Confirmación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Respuesta Evolution": {
+      "main": [
+        [
+          {
+            "node": "Merge Confirmación",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Confirmación": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "Europe/Madrid"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
