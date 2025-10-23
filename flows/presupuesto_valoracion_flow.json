@@ -2,15 +2,20 @@
   "name": "Agente IA Presupuestos y Valoraciones",
   "nodes": [
     {
-      "parameters": {
-        "updates": ["messages"],
-        "options": {}
-      },
       "id": "trigger",
       "name": "WhatsApp Trigger",
       "type": "n8n-nodes-base.whatsAppTrigger",
       "typeVersion": 1,
-      "position": [-960, 320],
+      "position": [
+        -1400,
+        200
+      ],
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
       "webhookId": "TRIGGER-UUID-REPLACE",
       "credentials": {
         "whatsAppTriggerApi": {
@@ -20,105 +25,31 @@
       }
     },
     {
-      "parameters": {
-        "operation": "get",
-        "key": "={{ 'session:' + ($json.messages?.[0]?.from || $json.body?.from || $json.from || $json.phone) }}"
-      },
-      "id": "redis_get",
-      "name": "Cargar estado",
-      "type": "n8n-nodes-base.redis",
-      "typeVersion": 1,
-      "position": [-656, 320],
-      "credentials": {
-        "redis": {
-          "id": "uUALR6mzUYb59fEr",
-          "name": "Redis account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "const incoming = $('WhatsApp Trigger').item.json || {};\nconst rawState = items[0].json?.value ? JSON.parse(items[0].json.value) : null;\nconst state = rawState || {\n  mode: null,\n  step: 0,\n  answers: {\n    address: '',\n    perimeter: null,\n    facade: null,\n    heights: null,\n    neighbors: null,\n    price_m2: null,\n    elements: [],\n    photos: { fachada: 0, medianeras: 0, terraza: 0, cubierta: 0 },\n    windows_m2: 0,\n    terraces_m2: 0\n  },\n  confirmations: { catastro: false, resumen: false },\n  summary: null,\n  documents: []\n};\n\nconst msg = incoming.messages?.[0] || incoming.body || incoming;\nconst text = String(msg?.text?.body || '').trim();\nconst type = msg?.type || (msg?.image ? 'image' : 'text');\nconst reply = { action: 'ask', text: '', requiresPhotos: false, state, documents: [] };\nconst lower = text.toLowerCase();\n\nfunction ensureMode(){\n  if(state.mode) return;\n  if(/presupuesto|aislamiento|sate/.test(lower)) state.mode='presupuesto';\n  else if(/valoraci[óo]n|valuaci|precio/.test(lower)) state.mode='valoracion';\n}\n\nfunction askNext(){\n  const qVal = [\n    'Para la valoración necesito la dirección completa.',\n    '¿Cuál es el perímetro exterior en metros?',\n    '¿Cuál es la superficie de fachada (m²)?',\n    '¿Cuántas alturas tiene el edificio?',\n    '¿Cuántas viviendas o vecinos hay?',\n    '¿Qué precio por metro cuadrado debemos usar?'\n  ];\n  const qPre = [\n    'Para empezar, dime la dirección completa.',\n    'Indica el perímetro exterior en metros.',\n    'Indica la superficie de fachada en m².',\n    '¿Cuántas alturas tiene el edificio?',\n    '¿Cuántos vecinos o viviendas hay?',\n    'Lista los elementos a desmontar (aires, antenas, tuberías, cables, canaletas, placas solares).',\n    'Necesito la foto de la fachada 1 indicando si es medianera.',\n    'Foto de la fachada 2.',\n    'Foto de la fachada 3.',\n    'Foto de la fachada 4 (indica si es medianera).',\n    'Si hay terrazas cerradas envía foto y superficie, si no responde "no".',\n    'Por último, envía una foto de la cubierta.'\n  ];\n  const questions = state.mode === 'valoracion' ? qVal : qPre;\n  if(state.step < questions.length){\n    reply.text = questions[state.step];\n    reply.requiresPhotos = state.step >= 6 && state.mode === 'presupuesto';\n    return true;\n  }\n  return false;\n}\n\nfunction fakeCatastroLookup(address){\n  return {\n    perimeter: 120,\n    facade: 480,\n    heights: 4,\n    neighbors: 16,\n    ref: 'FAKE-REF-1234'\n  };\n}\n\nfunction buildResumen(){\n  const ans = state.answers;\n  const lines = [\n    `Dirección: ${ans.address || '—'}`,\n    `Perímetro: ${ans.perimeter ?? '—'} m`,\n    `Fachada: ${ans.facade ?? '—'} m²`,\n    `Alturas: ${ans.heights ?? '—'}`,\n    `Vecinos: ${ans.neighbors ?? '—'}`\n  ];\n  if(state.mode === 'valoracion') lines.push(`Precio m²: ${ans.price_m2 ?? '—'}`);\n  if(state.mode === 'presupuesto'){\n    lines.push(`Fotos fachada recibidas: ${ans.photos.fachada}`);\n    lines.push(`Fotos medianeras marcadas: ${ans.photos.medianeras}`);\n    lines.push(`Fotos terrazas: ${ans.photos.terraza}`);\n    lines.push(`Fotos cubierta: ${ans.photos.cubierta}`);\n  }\n  state.summary = lines.join('\n');\n  return state.summary;\n}\n\nif(type === 'image'){\n  state.answers.photos.fachada += 1;\n  reply.text = 'Foto recibida. Si corresponde a una medianera responde "medianera".';\n  reply.requiresPhotos = false;\n  state.step = Math.min(state.step + 1, state.mode === 'presupuesto' ? 12 : state.step);\n  return [{ json: reply }];\n}\n\nensureMode();\nif(!state.mode){\n  reply.text = '¿Quieres iniciar un presupuesto de fachada/cubierta o una valoración?';\n  return [{ json: reply }];\n}\n\nif(!text){\n  askNext();\n  return [{ json: reply }];\n}\n\nif(state.mode === 'valoracion'){\n  switch(state.step){\n    case 0:\n      state.answers.address = text;\n      const datos = fakeCatastroLookup(text);\n      state.answers.perimeter = datos.perimeter;\n      state.answers.facade = datos.facade;\n      state.answers.heights = datos.heights;\n      state.answers.neighbors = datos.neighbors;\n      state.confirmations.catastro = true;\n      reply.text = `He consultado Catastro (ref ${datos.ref}).\nPerímetro ${datos.perimeter} m, fachada ${datos.facade} m², alturas ${datos.heights}, vecinos ${datos.neighbors}. ¿Quieres ajustar alguno?`;\n      state.summary = buildResumen();\n      state.step = 1;\n      return [{ json: reply }];\n    case 1:\n      state.answers.perimeter = Number(text.replace(',', '.')) || state.answers.perimeter;\n      state.step++; break;\n    case 2:\n      state.answers.facade = Number(text.replace(',', '.')) || state.answers.facade;\n      state.step++; break;\n    case 3:\n      state.answers.heights = parseInt(text, 10) || state.answers.heights;\n      state.step++; break;\n    case 4:\n      state.answers.neighbors = parseInt(text, 10) || state.answers.neighbors;\n      state.step++; break;\n    case 5:\n      state.answers.price_m2 = Number(text.replace(',', '.')) || state.answers.price_m2;\n      state.step++; break;\n    default:\n      state.step++;\n  }\n  if(state.step >= 6){\n    const valor = (state.answers.facade || 0) * (state.answers.price_m2 || 0);\n    reply.text = `${buildResumen()}\nValoración estimada: ${valor.toFixed(2)} €. ¿Generamos el PDF y lo cargamos en Odoo?`;
-    state.documents = [{ type: 'valoracion', total: valor }];
-  } else {
-    askNext();
-  }
-  return [{ json: reply }];
-}
-
-// Presupuesto
-switch(state.step){
-  case 0:
-    state.answers.address = text;
-    const datos = fakeCatastroLookup(text);
-    state.answers.perimeter = datos.perimeter;
-    state.answers.facade = datos.facade;
-    state.answers.heights = datos.heights;
-    state.answers.neighbors = datos.neighbors;
-    reply.text = `RC ${datos.ref}. Tomo perímetro ${datos.perimeter} m y fachada ${datos.facade} m². Ajusta si es necesario.`;
-    state.summary = buildResumen();
-    state.step = 1;
-    return [{ json: reply }];
-  case 1:
-    state.answers.perimeter = Number(text.replace(',', '.')) || state.answers.perimeter;
-    state.step++; break;
-  case 2:
-    state.answers.facade = Number(text.replace(',', '.')) || state.answers.facade;
-    state.step++; break;
-  case 3:
-    state.answers.heights = parseInt(text,10) || state.answers.heights;
-    state.step++; break;
-  case 4:
-    state.answers.neighbors = parseInt(text,10) || state.answers.neighbors;
-    state.step++; break;
-  case 5:
-    state.answers.elements = text.split(/[,;]+/).map(x=>x.trim()).filter(Boolean);
-    state.step++;
-    reply.text = 'Perfecto. Vamos con las fotos de las fachadas.';
-    reply.requiresPhotos = true;
-    return [{ json: reply }];
-  case 10:
-    if(/^no$/i.test(text)){
-      state.answers.terraces_m2 = 0;
-    } else {
-      state.answers.terraces_m2 = Number(text.replace(',', '.')) || state.answers.terraces_m2;
-    }
-    state.step++;
-    askNext();
-    return [{ json: reply }];
-  default:
-    state.step++;
-}
-
-if(state.step >= 12){
-  const areaEfectiva = Math.max((state.answers.facade || 0) - (state.answers.windows_m2 || 0) - (state.answers.terraces_m2 || 0), 0);
-  const costeBase = areaEfectiva * 65; // placeholder
-  reply.text = `${buildResumen()}\nÁrea efectiva tras huecos: ${areaEfectiva.toFixed(2)} m². Coste estimado ${costeBase.toFixed(2)} €. ¿Generamos presupuesto en Odoo y lo enviamos?`;
-  state.documents = [{ type: 'presupuesto', total: costeBase }];
-} else {
-  askNext();
-}
-
-return [{ json: reply }];
-"
-      },
-      "id": "agent",
-      "name": "Agente Maestro",
+      "id": "normalize",
+      "name": "Normalizar Entrada",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-400, 320]
+      "position": [
+        -1180,
+        200
+      ],
+      "parameters": {
+        "jsCode": "\nconst item = items[0].json || {};\nconst msg = item.messages?.[0] || item.entry?.[0]?.changes?.[0]?.value?.messages?.[0] || item.body || item;\nconst type = msg?.type || 'text';\nconst phone = msg?.from || item.from || item.phone || 'unknown';\nconst text = (msg?.text?.body || item.text?.body || item.body?.text?.body || '').trim();\nconst imageId = msg?.image?.id || null;\nconst audioId = msg?.audio?.id || null;\nconst now = Date.now();\nreturn [{ json: {\n  raw: item,\n  message: msg,\n  type,\n  phone,\n  text,\n  imageId,\n  audioId,\n  timestamp: now,\n  sessionFile: `/data/sessions/${phone}.json`,\n  vectorDbFile: `/data/vector_db.json`,\n  imagePublicUrl: item.imagePublicUrl || null\n} }];\n"
+      }
     },
     {
-      "parameters": {
-        "operation": "set",
-        "key": "={{ 'session:' + ($('WhatsApp Trigger').item.json.messages[0].from) }}",
-        "value": "={{ $json.state ? JSON.stringify($json.state) : '' }}"
-      },
-      "id": "redis_set",
-      "name": "Guardar estado",
+      "id": "redis_get",
+      "name": "Cargar Estado Redis",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
-      "position": [-176, 320],
+      "position": [
+        -980,
+        200
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'session:' + $json.phone }}"
+      },
       "credentials": {
         "redis": {
           "id": "uUALR6mzUYb59fEr",
@@ -127,16 +58,410 @@ return [{ json: reply }];
       }
     },
     {
+      "id": "prepare",
+      "name": "Preparar Estado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -780,
+        200
+      ],
       "parameters": {
-        "phoneNumberId": "766013233264996",
-        "recipientPhoneNumber": "={{ $('WhatsApp Trigger').item.json.messages[0].from }}",
-        "textBody": "={{ $json.text || '¿Podrías repetirlo?' }}"
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst input = items[0].json || {};\nconst stateFile = input.sessionFile;\nconst dir = path.dirname(stateFile);\nif (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\nlet state = null;\nif (fs.existsSync(stateFile)) {\n  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (e) { state = null; }\n}\nif (!state) {\n  state = {\n    phone: input.phone,\n    history: [],\n    currentTask: null,\n    valoracion: { data: { address: null, perimeter: null, area: null, heights: null, neighbors: null, price_per_m2: null }, completed: false, pdfUrl: null },\n    presupuesto: { data: { address: null, perimeter: null, area: null, heights: null, neighbors: null, price_per_m2: null, elements: { ac_units: 0, antennas: 0, pipes: 0, cables: 0, gutters: 0, solar_panels: 0 }, windows: [], terraces: [], photos: { facades: [], roof: [], terraces: [] } }, completed: false, pdfUrl: null },\n    confirmations: [],\n    catastro: { status: 'idle', lastLookup: null, ref: null },\n    flags: {},\n    nextAction: null,\n    lastReply: null,\n    updatedAt: null\n  };\n}\nconst redisValue = input.value || input.estadoSesion || '';\nif (redisValue) {\n  try { const fromRedis = JSON.parse(redisValue); state = { ...state, ...fromRedis }; } catch (e) {}\n}\nstate.updatedAt = Date.now();\nfs.writeFileSync(stateFile, JSON.stringify(state, null, 2));\nconst resumen = [];\nif (state.currentTask) resumen.push(`modo: ${state.currentTask}`);\nconst v = state.valoracion.data;\nresumen.push(`valoraci\u00f3n => per\u00edmetro:${v.perimeter||'\u2014'} area:${v.area||'\u2014'} alturas:${v.heights||'\u2014'} vecinos:${v.neighbors||'\u2014'} precio_m2:${v.price_per_m2||'\u2014'}`);\nconst p = state.presupuesto.data;\nresumen.push(`presupuesto => per\u00edmetro:${p.perimeter||'\u2014'} area:${p.area||'\u2014'} alturas:${p.heights||'\u2014'} vecinos:${p.neighbors||'\u2014'} elementos:${JSON.stringify(p.elements)}`);\nreturn [{ json: { ...input, state, stateSummary: resumen.join('\n'), sessionFile: stateFile, vectorDbFile: input.vectorDbFile } }];\n"
+      }
+    },
+    {
+      "id": "vector_boot",
+      "name": "Vector DB Bootstrap",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -580,
+        200
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst path = items[0].json.vectorDbFile;\nconst dir = require('path').dirname(path);\nif (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\nif (!fs.existsSync(path)) {\n  const seed = { clientes: [], oportunidades: [] };\n  fs.writeFileSync(path, JSON.stringify(seed, null, 2));\n}\nreturn items;\n"
+      }
+    },
+    {
+      "id": "agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -360,
+        200
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text || \"\" }}",
+        "options": {
+          "systemMessage": "Eres un especialista en rehabilitaci\u00f3n energ\u00e9tica que conversa por WhatsApp.\n\nObjetivo general: conseguir toda la informaci\u00f3n necesaria para emitir una VALORACI\u00d3N t\u00e9cnica o un PRESUPUESTO detallado. El usuario puede dar los datos en cualquier orden; tu trabajo es guiarlos con orden y confirmar cada paso.\n\n--- MODO VALORACI\u00d3N ---\nRequisitos m\u00ednimos (pedir uno a uno y confirmar):\n1. Direcci\u00f3n del inmueble (para catastro).\n2. Per\u00edmetro de cubierta (m).\n3. \u00c1rea \u00fatil de fachada (m\u00b2).\n4. N\u00famero de alturas.\n5. N\u00famero de vecinos/viviendas.\n6. Precio objetivo por metro cuadrado.\n\nCuando tengas todos los datos, llama a update_session con {\"update\":{\"valoracion\":{\"data\":{...}}},\"nextAction\":\"valoracion_pdf\"}.\n\n--- MODO PRESUPUESTO ---\nNecesitas recopilar y confirmar: direcci\u00f3n, per\u00edmetro, superficie de fachada, alturas, vecinos, elementos a desmontar (aires, antenas, tuber\u00edas, cables, canaletas, placas solares), recuento de ventanas con medidas, terrazas cerradas con medidas y fotos evidenciales. Pide las fotos una a una: fachada 1 a fachada 4 (marca si una es medianera y no se mide), cubierta y terrazas relevantes. Tras cada foto utiliza analyze_image para extraer medidas y elementos y confirma con el usuario. Registra los datos llamando a update_session con campos en presupuesto.data (per\u00edmetro, area, heights, neighbors, elements, windows[{nombre,ancho,alto}], terraces[{nombre,superficie}], photos...).\nCuando todo est\u00e9 listo llama a update_session con {\"nextAction\":\"presupuesto_pdf\"}.\n\n--- VECTOR DB ---\nPara identificar clientes u oportunidades existentes, usa la herramienta vector_db con {\"action\":\"search\",\"scope\":\"cliente\"|\"oportunidad\",\"query\":\"...\"}. Para registrar nuevos datos usa action \"upsert\" con metadata adecuada.\n\n--- CONFIRMACIONES ---\nSiempre que recibas informaci\u00f3n inferida autom\u00e1ticamente (catastro o visi\u00f3n), confirma con el usuario antes de cerrarla.\n\n--- RESPUESTA ---\nResponde de forma cercana, en espa\u00f1ol, indicando el siguiente dato o evidencia que necesitas. Si ya tienes todo y has lanzado la acci\u00f3n en Odoo, informa que est\u00e1s generando el PDF. Nunca inventes valores.\n\nContexto disponible:\n{{ $json.stateSummary }}\nMensaje del usuario: {{ $json.text || '(adjunto)' }}\nFoto disponible: {{ $json.imagePublicUrl || 'no' }}"
+        }
+      }
+    },
+    {
+      "id": "tool_update",
+      "name": "Tool: Update Session",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        -360,
+        20
+      ],
+      "parameters": {
+        "name": "update_session",
+        "description": "Actualiza el estado de la sesi\u00f3n y opcionalmente define nextAction.",
+        "jsCode": "\nconst fs = require('fs');\nconst path = items[0].json.sessionFile;\nconst payloadRaw = items[0].json.input || items[0].json;\nlet payload = payloadRaw;\nif (typeof payloadRaw === 'string') { try { payload = JSON.parse(payloadRaw); } catch (e) { payload = {}; } }\nlet state = JSON.parse(fs.readFileSync(path, 'utf8'));\nfunction merge(target, source){\n  for (const key of Object.keys(source || {})) {\n    const val = source[key];\n    if (val && typeof val === 'object' && !Array.isArray(val)) {\n      if (!target[key] || typeof target[key] !== 'object') target[key] = {};\n      merge(target[key], val);\n    } else {\n      target[key] = val;\n    }\n  }\n}\nif (payload.update) merge(state, payload.update);\nif (payload.append) {\n  for (const [k,v] of Object.entries(payload.append)) {\n    if (!Array.isArray(state[k])) state[k] = [];\n    if (Array.isArray(v)) state[k].push(...v); else state[k].push(v);\n  }\n}\nif (payload.nextAction) state.nextAction = payload.nextAction;\nstate.updatedAt = Date.now();\nfs.writeFileSync(path, JSON.stringify(state, null, 2));\nreturn [{ json: { ok: true, state } }];\n"
+      }
+    },
+    {
+      "id": "tool_vector",
+      "name": "Tool: Vector DB",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        -360,
+        -160
+      ],
+      "parameters": {
+        "name": "vector_db",
+        "description": "Busca o registra informaci\u00f3n en la base vectorizada local.",
+        "jsCode": "\nconst fs = require('fs');\nconst path = items[0].json.vectorDbFile;\nconst payloadRaw = items[0].json.input || items[0].json;\nlet payload = payloadRaw;\nif (typeof payloadRaw === 'string') { try { payload = JSON.parse(payloadRaw); } catch (e) { payload = {}; } }\nconst scope = payload.scope || 'cliente';\nconst data = JSON.parse(fs.readFileSync(path, 'utf8'));\nfunction embed(text){\n  const tokens = String(text || '').toLowerCase().split(/[^a-z0-9\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1]+/).filter(Boolean);\n  const counts = {};\n  for (const t of tokens) counts[t] = (counts[t] || 0) + 1;\n  return counts;\n}\nfunction cosine(a,b){\n  let dot=0,na=0,nb=0;\n  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);\n  for (const k of keys) {\n    const va = a[k] || 0;\n    const vb = b[k] || 0;\n    dot += va * vb;\n    na += va * va;\n    nb += vb * vb;\n  }\n  if (!na || !nb) return 0;\n  return dot / Math.sqrt(na * nb);\n}\nif (payload.action === 'upsert') {\n  const collection = scope === 'oportunidad' ? 'oportunidades' : 'clientes';\n  const record = {\n    id: payload.id || `item_${Date.now()}`,\n    text: payload.text || '',\n    metadata: payload.metadata || {},\n    embedding: embed(payload.text || JSON.stringify(payload.metadata || {}))\n  };\n  const idx = data[collection].findIndex(r => r.id === record.id);\n  if (idx >= 0) data[collection][idx] = record; else data[collection].push(record);\n  fs.writeFileSync(path, JSON.stringify(data, null, 2));\n  return [{ json: { ok: true, id: record.id } }];\n}\nif (payload.action === 'search') {\n  const collection = scope === 'oportunidad' ? 'oportunidades' : 'clientes';\n  const queryVec = embed(payload.query || '');\n  const scored = data[collection].map(r => ({ ...r, score: cosine(queryVec, r.embedding) })).sort((a,b) => b.score - a.score).slice(0,5);\n  return [{ json: { ok: true, results: scored } }];\n}\nreturn [{ json: { ok: false, error: 'acci\u00f3n no soportada' } }];\n"
+      }
+    },
+    {
+      "id": "tool_image",
+      "name": "Analyze Image Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGeminiTool",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        200
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Analiza una foto del edificio y devuelve JSON con {type, facade_area_m2, perimeter_roof_m, heights, ac_units, antennas, solar_panels, pipes, cables, gutters, windows:[{name,width,height}], terraces:[{name,area}]}.",
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "text": "Devuelve SOLO JSON con los campos solicitados.",
+        "imageUrls": "={{ $json.imagePublicUrl ? [$json.imagePublicUrl] : [] }}"
       },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CVBgyokqr4qUIaKx",
+          "name": "Plataformas Network API"
+        }
+      }
+    },
+    {
+      "id": "read_state",
+      "name": "Leer Estado Sesi\u00f3n",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst state = JSON.parse(fs.readFileSync(items[0].json.sessionFile, 'utf8'));\nconst agentReply = items[0].json.output || items[0].json.agent_output || items[0].json.text || '';\nreturn [{ json: { ...items[0].json, state, agentReply } }];\n"
+      }
+    },
+    {
+      "id": "catastro_decision",
+      "name": "Decisi\u00f3n Catastro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst state = items[0].json.state;\nconst needs = !state.catastro || state.catastro.status !== 'done';\nconst address = state.valoracion?.data?.address || state.presupuesto?.data?.address || null;\nconst shouldRun = Boolean(address) && needs;\nreturn [{ json: { ...items[0].json, address, runCatastro: shouldRun } }];\n"
+      }
+    },
+    {
+      "id": "if_catastro",
+      "name": "Si requiere Catastro",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond",
+              "leftValue": "={{ $json.runCatastro }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "catastro_lookup",
+      "name": "Catastro Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        260
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst stateFile = items[0].json.sessionFile;\nlet state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));\nconst address = items[0].json.address;\nif (!address) {\n  return [{ json: { ...items[0].json, catastroReply: 'Necesito una direcci\u00f3n v\u00e1lida para consultar el Catastro.' } }];\n}\nasync function httpGet(url, opts={}) {\n  return await this.helpers.httpRequest({ method: 'GET', url, timeout: opts.timeout || 20000, headers: { 'User-Agent': 'n8n-catastro-bot/1.0', 'Accept': opts.accept || '*/*' } });\n}\nasync function geocode(addr) {\n  try {\n    const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(addr)}`;\n    const res = await httpGet(u, { accept: 'application/json' });\n    const data = typeof res === 'string' ? JSON.parse(res) : res;\n    if (Array.isArray(data) && data[0]) return { lat: +data[0].lat, lon: +data[0].lon };\n  } catch (e) {}\n  return null;\n}\nfunction bbox4326(lat, lon, pad=0.0006) { return `${lat-pad},${lon-pad},${lat+pad},${lon+pad}`; }\nfunction parseTextTable(txt) {\n  const lines = String(txt || '').split(/\r?\n/);\n  const out = {};\n  for (const line of lines) {\n    const [k,v] = line.split('\t');\n    if (!k) continue;\n    out[k.trim()] = String(v || '').trim();\n  }\n  return out;\n}\nfunction toNumber(value) {\n  if (value == null) return null;\n  const n = Number(String(value).replace(/,/g,'.').replace(/\\s+/g,''));\n  return Number.isFinite(n) ? n : null;\n}\nfunction areaPerimeterXY(pts) {\n  let area=0,peri=0;\n  for (let i=0;i<pts.length;i++) {\n    const [x1,y1]=pts[i], [x2,y2]=pts[(i+1)%pts.length];\n    area += x1*y2 - x2*y1;\n    peri += Math.hypot(x2-x1, y2-y1);\n  }\n  return { area: Math.abs(area)/2, perimeter: peri };\n}\nfunction parseGmlPositions(gml) {\n  const regex=/<gml:posList[^>]*>([\\s\\S]*?)<\\/gml:posList>/gi;\n  const polys=[];\n  let match;\n  while((match=regex.exec(gml))){\n    const nums=match[1].trim().split(/\\s+/).map(Number).filter(Number.isFinite);\n    if(nums.length<6) continue;\n    const step = (nums.length % 3 === 0) ? 3 : 2;\n    const poly=[];\n    for(let i=0;i+step-1<nums.length;i+=step) poly.push([nums[i], nums[i+1]]);\n    if(poly.length>=3) polys.push(poly);\n  }\n  return polys;\n}\nasync function geomFromWFS(inspireId){\n  const bases=['https://ovc.catastro.meh.es','http://ovc.catastro.meh.es'];\n  for(const base of bases){\n    const url = `${base}/INSPIRE/wfsBU.aspx?service=WFS&version=2.0.0&request=GetFeature&storedquery_id=GetBuilding&inspireId=${encodeURIComponent(inspireId)}`;\n    try {\n      const gml = await httpGet(url, { accept: 'application/xml,text/xml,*/*', timeout: 20000 });\n      const polys = parseGmlPositions(gml);\n      if (polys.length){\n        let area=0,peri=0;\n        for(const poly of polys){\n          const geom = areaPerimeterXY(poly);\n          area += geom.area;\n          peri += geom.perimeter;\n        }\n        return { area, peri };\n      }\n    } catch (e) {}\n  }\n  return null;\n}\nasync function getCatastro(lat, lon){\n  const base='https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx';\n  const url=`${base}?service=WMS&request=GetFeatureInfo&version=1.3.0&CRS=EPSG:4326&LAYERS=BU.Building&QUERY_LAYERS=BU.Building&WIDTH=101&HEIGHT=101&I=50&J=50&BBOX=${bbox4326(lat,lon)}&INFO_FORMAT=text/plain`;\n  try {\n    const txt = await httpGet(url, { accept: 'text/plain' });\n    const kv = parseTextTable(txt);\n    const inspireId = kv['inspireId'] || Object.values(kv).find(v => /ES\\.SDGC\\.BU\\./.test(v)) || null;\n    const dwellings = toNumber(kv['numberOfDwellings']);\n    const floors = toNumber(kv['numberOfFloors']) || toNumber(kv['numberOfFloorsAboveGround']);\n    let area=null, peri=null;\n    if (inspireId){\n      const geom = await geomFromWFS(inspireId);\n      if (geom){ area = geom.area; peri = geom.peri; }\n      return { inspireId, dwellings, floors, area, peri };\n    }\n    return { dwellings, floors, area, peri };\n  } catch (e) {\n    return null;\n  }\n}\n(async () => {\n  const geo = await geocode(address);\n  if (!geo){\n    return [{ json: { ...items[0].json, catastroReply: 'No pude geolocalizar la direcci\u00f3n, \u00bfpuedes confirmarla?' } }];\n  }\n  const data = await getCatastro(geo.lat, geo.lon);\n  if (!data){\n    return [{ json: { ...items[0].json, catastroReply: 'No encontr\u00e9 datos catastrales, \u00bfpuedes darme m\u00e1s detalles o la referencia catastral?' } }];\n  }\n  if (data.peri) state.valoracion.data.perimeter = Number(data.peri.toFixed(2));\n  if (data.area) state.valoracion.data.area = Number(data.area.toFixed(2));\n  if (!state.presupuesto.data.perimeter && data.peri) state.presupuesto.data.perimeter = Number(data.peri.toFixed(2));\n  if (!state.presupuesto.data.area && data.area) state.presupuesto.data.area = Number(data.area.toFixed(2));\n  if (data.floors) {\n    state.valoracion.data.heights = Math.max(1, Math.round(data.floors));\n    state.presupuesto.data.heights = Math.max(1, Math.round(data.floors));\n  }\n  if (data.dwellings) state.valoracion.data.neighbors = Math.max(1, Math.round(data.dwellings));\n  state.catastro = { status: 'done', lastLookup: Date.now(), ref: data.inspireId || null, coords: geo };\n  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));\n  const resumen = [\n    `Per\u00edmetro \u2248 ${state.valoracion.data.perimeter || '\u2014'} m`,\n    `\u00c1rea \u2248 ${state.valoracion.data.area || '\u2014'} m\u00b2`,\n    `Alturas \u2248 ${state.valoracion.data.heights || '\u2014'}`,\n    `Vecinos \u2248 ${state.valoracion.data.neighbors || '\u2014'}`\n  ].join('\n');\n  return [{ json: { ...items[0].json, state, catastroReply: `Datos Catastro:\n${resumen}\n\u00bfCoincide con la realidad?` } }];\n})();\n"
+      }
+    },
+    {
+      "id": "catastro_skip",
+      "name": "Catastro Passthrough",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        520
+      ],
+      "parameters": {
+        "jsCode": "return items;"
+      }
+    },
+    {
+      "id": "post_catastro",
+      "name": "Leer Estado Tras Catastro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst state = JSON.parse(fs.readFileSync(items[0].json.sessionFile, 'utf8'));\nreturn [{ json: { ...items[0].json, state } }];\n"
+      }
+    },
+    {
+      "id": "check_completion",
+      "name": "Comprobaci\u00f3n de requisitos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst data = items[0].json;\nconst state = data.state;\nconst val = state.valoracion.data;\nconst pre = state.presupuesto.data;\nconst valoracionReady = Boolean(val.address && val.perimeter && val.area && val.heights && val.neighbors && val.price_per_m2);\nconst fotos = Array.isArray(pre.photos?.facades) ? pre.photos.facades.length : 0;\nconst techo = Array.isArray(pre.photos?.roof) ? pre.photos.roof.length : 0;\nconst ventanas = Array.isArray(pre.windows) ? pre.windows.length : 0;\nconst presupuestoReady = Boolean(pre.address && pre.perimeter && pre.area && pre.heights && fotos >= 3 && techo >= 1 && ventanas >= 1 && pre.elements);\nlet nextAction = state.nextAction || null;\nif (!nextAction) {\n  if (valoracionReady) nextAction = 'valoracion_pdf';\n  else if (presupuestoReady) nextAction = 'presupuesto_pdf';\n}\nreturn [{ json: { ...data, nextAction, valoracionReady, presupuestoReady } }];\n"
+      }
+    },
+    {
+      "id": "switch_action",
+      "name": "Ruta Acci\u00f3n",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.nextAction || \"\" }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "valoracion_pdf",
+              "outputKey": "VALORACION"
+            },
+            {
+              "value2": "presupuesto_pdf",
+              "outputKey": "PRESUPUESTO"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "odoo_valoracion",
+      "name": "Generar Valoraci\u00f3n Odoo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ODOO_BASE_URL + \"/api/valoraciones\" }}",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 30000
+        },
+        "body": "{\"phone\":\"{{$json.phone}}\",\"datos\":{{$json.state.valoracion.data}}}"
+      }
+    },
+    {
+      "id": "odoo_presupuesto",
+      "name": "Generar Presupuesto Odoo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ODOO_BASE_URL + \"/api/presupuestos\" }}",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 40000
+        },
+        "body": "{\"phone\":\"{{$json.phone}}\",\"datos\":{{$json.state.presupuesto.data}}}"
+      }
+    },
+    {
+      "id": "post_action",
+      "name": "Procesar Resultado Acci\u00f3n",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst stateFile = items[0].json.sessionFile;\nconst state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));\nconst res = items[0].json.body || items[0].json;\nif (state.nextAction === 'valoracion_pdf') state.valoracion.pdfUrl = res.pdf_url || res.pdfUrl || null;\nif (state.nextAction === 'presupuesto_pdf') state.presupuesto.pdfUrl = res.pdf_url || res.pdfUrl || null;\nstate.nextAction = null;\nstate.lastReply = res.mensaje || res.message || null;\nfs.writeFileSync(stateFile, JSON.stringify(state, null, 2));\nreturn [{ json: { ...items[0].json, state, actionReply: state.lastReply, pdfUrl: state.valoracion.pdfUrl || state.presupuesto.pdfUrl || null } }];\n"
+      }
+    },
+    {
+      "id": "assemble",
+      "name": "Ensamblar Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst parts = [];\nif (items[0].json.agentReply) parts.push(items[0].json.agentReply);\nif (items[0].json.catastroReply) parts.push(items[0].json.catastroReply);\nif (items[0].json.actionReply) parts.push(items[0].json.actionReply);\nconst message = parts.filter(Boolean).join('\n\n').trim() || 'Estoy pendiente de m\u00e1s datos.';\nreturn [{ json: { ...items[0].json, reply: message } }];\n"
+      }
+    },
+    {
+      "id": "redis_set",
+      "name": "Guardar Estado Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        320
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'session:' + $json.phone }}",
+        "value": "={{ JSON.stringify($json.state) }}"
+      },
+      "credentials": {
+        "redis": {
+          "id": "uUALR6mzUYb59fEr",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
       "id": "send_text",
-      "name": "Enviar respuesta",
+      "name": "Enviar Mensaje",
       "type": "n8n-nodes-base.whatsApp",
       "typeVersion": 1.1,
-      "position": [32, 320],
+      "position": [
+        2120,
+        240
+      ],
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "766013233264996",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "textBody": "={{ $json.reply }}"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "update_local",
+      "name": "Actualizar Base Local",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        360
+      ],
+      "parameters": {
+        "jsCode": "\nconst fs = require('fs');\nconst path = '/data/local_db.json';\nconst dir = require('path').dirname(path);\nif (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\nlet data = { clientes: [], oportunidades: [] };\nif (fs.existsSync(path)) { try { data = JSON.parse(fs.readFileSync(path, 'utf8')); } catch (e) {} }\nconst state = items[0].json.state;\nconst cliente = { phone: state.phone, address: state.valoracion.data.address || state.presupuesto.data.address || null, updatedAt: Date.now() };\nconst idx = data.clientes.findIndex(c => c.phone === cliente.phone);\nif (idx >= 0) data.clientes[idx] = { ...data.clientes[idx], ...cliente }; else data.clientes.push(cliente);\nif (state.valoracion.pdfUrl) { data.oportunidades.push({ type: 'valoracion', phone: state.phone, pdfUrl: state.valoracion.pdfUrl, data: state.valoracion.data, timestamp: Date.now() }); }\nif (state.presupuesto.pdfUrl) { data.oportunidades.push({ type: 'presupuesto', phone: state.phone, pdfUrl: state.presupuesto.pdfUrl, data: state.presupuesto.data, timestamp: Date.now() }); }\nfs.writeFileSync(path, JSON.stringify(data, null, 2));\nreturn items;\n"
+      }
+    },
+    {
+      "id": "if_pdf",
+      "name": "Si hay PDF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        480
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c",
+              "leftValue": "={{ $json.pdfUrl }}",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty",
+                "name": "filter.operator.isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "send_pdf",
+      "name": "Enviar PDF",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2120,
+        520
+      ],
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "766013233264996",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "documentUrl": "={{ $json.pdfUrl }}",
+        "documentName": "={{ $json.state.nextAction === \"valoracion_pdf\" ? \"valoracion.pdf\" : \"presupuesto.pdf\" }}"
+      },
       "credentials": {
         "whatsAppApi": {
           "id": "zXNfmozR2UL0N2hS",
@@ -150,40 +475,270 @@ return [{ json: reply }];
       "main": [
         [
           {
-            "node": "Cargar estado",
+            "node": "Normalizar Entrada",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Cargar estado": {
+    "Normalizar Entrada": {
       "main": [
         [
           {
-            "node": "Agente Maestro",
+            "node": "Cargar Estado Redis",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Agente Maestro": {
+    "Cargar Estado Redis": {
       "main": [
         [
           {
-            "node": "Guardar estado",
+            "node": "Preparar Estado",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Guardar estado": {
+    "Preparar Estado": {
       "main": [
         [
           {
-            "node": "Enviar respuesta",
+            "node": "Vector DB Bootstrap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector DB Bootstrap": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Leer Estado Sesi\u00f3n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "ai_tool": [
+        [
+          {
+            "node": "Tool: Update Session",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool: Vector DB",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze Image Gemini",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer Estado Sesi\u00f3n": {
+      "main": [
+        [
+          {
+            "node": "Decisi\u00f3n Catastro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decisi\u00f3n Catastro": {
+      "main": [
+        [
+          {
+            "node": "Si requiere Catastro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Si requiere Catastro": {
+      "main": [
+        [
+          {
+            "node": "Catastro Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Catastro Passthrough",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catastro Lookup": {
+      "main": [
+        [
+          {
+            "node": "Leer Estado Tras Catastro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catastro Passthrough": {
+      "main": [
+        [
+          {
+            "node": "Leer Estado Tras Catastro",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Leer Estado Tras Catastro": {
+      "main": [
+        [
+          {
+            "node": "Comprobaci\u00f3n de requisitos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comprobaci\u00f3n de requisitos": {
+      "main": [
+        [
+          {
+            "node": "Ruta Acci\u00f3n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ruta Acci\u00f3n": {
+      "main": [
+        [
+          {
+            "node": "Ensamblar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generar Valoraci\u00f3n Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generar Presupuesto Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Valoraci\u00f3n Odoo": {
+      "main": [
+        [
+          {
+            "node": "Procesar Resultado Acci\u00f3n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Presupuesto Odoo": {
+      "main": [
+        [
+          {
+            "node": "Procesar Resultado Acci\u00f3n",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Procesar Resultado Acci\u00f3n": {
+      "main": [
+        [
+          {
+            "node": "Ensamblar Respuesta",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Ensamblar Respuesta": {
+      "main": [
+        [
+          {
+            "node": "Guardar Estado Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Estado Redis": {
+      "main": [
+        [
+          {
+            "node": "Enviar Mensaje",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Actualizar Base Local",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Si hay PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Si hay PDF": {
+      "main": [
+        [
+          {
+            "node": "Enviar PDF",
             "type": "main",
             "index": 0
           }
@@ -191,6 +746,7 @@ return [{ json: reply }];
       ]
     }
   },
-  "pinData": {},
-  "meta": {}
+  "settings": {
+    "executionOrder": "v1"
+  }
 }
