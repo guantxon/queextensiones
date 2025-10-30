@@ -1,0 +1,329 @@
+{
+  "name": "Consulta Catastro por Dirección",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "catastro-api",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1160,
+        260
+      ],
+      "webhookId": "catastro-api-v1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Parse and validate input address\nconst input = $input.first().json;\nconst direccion = input.query?.direccion || input.direccion || input.address || '';\n\nif (!direccion || typeof direccion !== 'string' || direccion.trim().length === 0) {\n  throw new Error('No se proporcionó una dirección válida');\n}\n\nfunction normalizeAddress(addr) {\n  let clean = String(addr).trim();\n\n  clean = clean.replace(/^(la\\s+dirección\\s+es\\s*:?-?\\s*)/i, '');\n  clean = clean.replace(/\\s+/g, ' ').trim();\n\n  if (!/españa|spain/i.test(clean)) {\n    clean = clean.replace(/[,.\\s]+$/, '') + ', España';\n  }\n\n  return clean.trim();\n}\n\nconst normalized = normalizeAddress(direccion);\n\nconsole.log('Input address:', direccion);\nconsole.log('Normalized:', normalized);\n\nreturn {\n  json: {\n    direccion: normalized,\n    direccion_original: direccion.trim(),\n    timestamp: new Date().toISOString(),\n    workflow_version: 'v1.0'\n  }\n};\n"
+      },
+      "id": "parse_input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Geocode address using multiple providers\nconst direccion = $input.first().json.direccion;\nconst direccionOriginal = $input.first().json.direccion_original;\n\nconst results = [];\n\nasync function fetchJSON(url, headers = {}) {\n  try {\n    const defaultHeaders = {\n      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',\n      'Accept': 'application/json'\n    };\n\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      timeout: 15000,\n      headers: { ...defaultHeaders, ...headers },\n      json: true\n    });\n\n    return response;\n  } catch (error) {\n    console.error(`Fetch error for ${url}:`, error.message);\n    return null;\n  }\n}\n\nfunction isValidSpainCoords(lat, lon) {\n  return lat >= 27.5 && lat <= 43.8 && lon >= -18.5 && lon <= 4.5;\n}\n\nfunction extractProvincia(state, county) {\n  if (!state && !county) return null;\n\n  const stateNorm = (state || '').toLowerCase().trim();\n  const countyNorm = (county || '').toLowerCase().trim();\n\n  const provincias = [\n    'madrid', 'barcelona', 'valencia', 'sevilla', 'málaga', 'malaga',\n    'murcia', 'alicante', 'córdoba', 'cordoba', 'valladolid', 'coruña',\n    'coruna', 'granada', 'oviedo', 'bilbao', 'zaragoza', 'cádiz', 'cadiz',\n    'toledo', 'navarra', 'cantabria', 'rioja', 'asturias',\n    'tarragona', 'badajoz', 'lleida', 'caceres', 'leon', 'burgos',\n    'guipúzcoa', 'guipuzcoa', 'vizcaya', 'jaen', 'almeria', 'almería',\n    'huelva', 'palmas', 'tenerife'\n  ];\n\n  for (const prov of provincias) {\n    if (stateNorm.includes(prov) || countyNorm.includes(prov)) {\n      return prov;\n    }\n  }\n\n  const comunidadMap = {\n    'comunidad de madrid': 'madrid',\n    'cataluña': 'barcelona',\n    'catalunya': 'barcelona',\n    'comunidad valenciana': 'valencia',\n    'comunitat valenciana': 'valencia',\n    'andalucía': 'sevilla',\n    'andalucia': 'sevilla',\n    'país vasco': 'vizcaya',\n    'euskadi': 'vizcaya',\n    'galicia': 'coruña',\n    'castilla y león': 'valladolid',\n    'castilla-la mancha': 'toledo',\n    'aragón': 'zaragoza',\n    'aragon': 'zaragoza',\n    'extremadura': 'badajoz',\n    'asturias': 'asturias',\n    'murcia': 'murcia',\n    'navarra': 'navarra',\n    'cantabria': 'cantabria',\n    'la rioja': 'rioja',\n    'islas baleares': 'baleares',\n    'illes balears': 'baleares',\n    'canarias': 'tenerife'\n  };\n\n  for (const [comunidad, provincia] of Object.entries(comunidadMap)) {\n    if (stateNorm.includes(comunidad)) {\n      return provincia;\n    }\n  }\n\n  return stateNorm || countyNorm || null;\n}\n\nfunction extractHouseNumber(address) {\n  if (!address) return null;\n  const patterns = [\n    /\b(\\d+)\\s*(?:bis|ter|[abc])?\b/i,\n    /nº\\s*(\\d+)/i,\n    /n\\.\\s*(\\d+)/i,\n    /número\\s*(\\d+)/i\n  ];\n\n  for (const pattern of patterns) {\n    const match = address.match(pattern);\n    if (match) return match[1];\n  }\n\n  return null;\n}\n\nfunction parseStreetName(street) {\n  if (!street) return { type: null, name: null };\n\n  const viaTypes = [\n    'calle', 'avenida', 'plaza', 'paseo', 'carretera', 'camino',\n    'glorieta', 'ronda', 'travesía', 'travesia', 'callejón', 'callejon',\n    'boulevard', 'parque', 'jardín', 'jardin', 'poligono', 'polígono'\n  ];\n\n  const streetLower = street.toLowerCase().trim();\n\n  for (const tipo of viaTypes) {\n    const patterns = [\n      new RegExp(`^${tipo}\\s+(.+)$`, 'i'),\n      new RegExp(`^${tipo[0]}\\.\\s+(.+)$`, 'i'),\n      new RegExp(`^${tipo}\\/(.+)$`, 'i')\n    ];\n\n    for (const pattern of patterns) {\n      const match = streetLower.match(pattern);\n      if (match) {\n        return {\n          type: tipo,\n          name: match[1].trim()\n        };\n      }\n    }\n  }\n\n  return { type: 'calle', name: street };\n}\n\nconsole.log('=== GEOCODING START ===');\nconsole.log('Address:', direccion);\n\ntry {\n  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=10&addressdetails=1&countrycodes=es&q=${encodeURIComponent(direccion)}`;\n  const data = await fetchJSON(url);\n\n  if (Array.isArray(data) && data.length > 0) {\n    for (const item of data) {\n      const lat = parseFloat(item.lat);\n      const lon = parseFloat(item.lon);\n\n      if (!isValidSpainCoords(lat, lon)) continue;\n\n      const addr = item.address || {};\n      const streetInfo = parseStreetName(addr.road || addr.pedestrian || addr.footway);\n      const provincia = extractProvincia(addr.state, addr.county) || addr.province;\n\n      results.push({\n        original: direccionOriginal,\n        full_address: item.display_name,\n        street_type: streetInfo.type,\n        street_name: streetInfo.name,\n        house_number: addr.house_number || extractHouseNumber(direccionOriginal),\n        postcode: addr.postcode || null,\n        city: addr.city || addr.town || addr.village || addr.municipality || null,\n        county: addr.county || null,\n        provincia: provincia,\n        state: addr.state || null,\n        country: 'España',\n        lat: lat.toFixed(7),\n        lon: lon.toFixed(7),\n        source: 'nominatim',\n        importance: parseFloat(item.importance || 0),\n        place_rank: parseInt(item.place_rank || 999)\n      });\n    }\n  }\n} catch (error) {\n  console.error('Nominatim error:', error.message);\n}\n\ntry {\n  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(direccion)}&limit=10&lang=es`;\n  const data = await fetchJSON(url);\n\n  if (data?.features && Array.isArray(data.features)) {\n    for (const feature of data.features) {\n      if (!feature?.geometry?.coordinates) continue;\n\n      const lon = parseFloat(feature.geometry.coordinates[0]);\n      const lat = parseFloat(feature.geometry.coordinates[1]);\n\n      if (!isValidSpainCoords(lat, lon)) continue;\n\n      const props = feature.properties || {};\n      const streetInfo = parseStreetName(props.street || props.name);\n      const provincia = extractProvincia(props.state, props.county);\n\n      const isDuplicate = results.some(r =>\n        Math.abs(parseFloat(r.lat) - lat) < 0.0001 &&\n        Math.abs(parseFloat(r.lon) - lon) < 0.0001\n      );\n\n      if (!isDuplicate) {\n        results.push({\n          original: direccionOriginal,\n          full_address: props.name || direccion,\n          street_type: streetInfo.type,\n          street_name: streetInfo.name,\n          house_number: props.housenumber || extractHouseNumber(direccionOriginal),\n          postcode: props.postcode || null,\n          city: props.city || props.town || props.village || null,\n          county: props.county || null,\n          provincia: provincia,\n          state: props.state || null,\n          country: 'España',\n          lat: lat.toFixed(7),\n          lon: lon.toFixed(7),\n          source: 'photon',\n          importance: 0.7,\n          place_rank: 500\n        });\n      }\n    }\n  }\n} catch (error) {\n  console.error('Photon error:', error.message);\n}\n\nif (results.length === 0) {\n  throw new Error(`No se pudo geocodificar la dirección: ${direccion}`);\n}\n\nresults.forEach(r => {\n  r.score = ((r.importance || 0) * 10) + (r.house_number ? 5 : 0) + (r.postcode ? 3 : 0) + (r.provincia ? 2 : 0) + (r.city ? 1 : 0) - ((r.place_rank || 999) / 100);\n});\n\nresults.sort((a, b) => b.score - a.score);\n\nconsole.log('=== GEOCODING COMPLETE ===');\nconsole.log(`Total results: ${results.length}`);\nconsole.log(`Best result: ${results[0].full_address}`);\n\nreturn results.map(addr => ({\n  json: {\n    direccion_original: direccionOriginal,\n    parsed_address: addr,\n    timestamp: new Date().toISOString()\n  }\n}));\n"
+      },
+      "id": "geocode",
+      "name": "Geocode Address",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Find cadastral reference using Catastro services\nconst parsedAddress = $input.first().json.parsed_address;\nconst direccionOriginal = $input.first().json.direccion_original;\n\nif (!parsedAddress) {\n  throw new Error('No parsed address available');\n}\n\nconst lat = parseFloat(parsedAddress.lat);\nconst lon = parseFloat(parsedAddress.lon);\n\nif (!Number.isFinite(lat) || !Number.isFinite(lon)) {\n  throw new Error('Invalid coordinates');\n}\n\nconst allReferences = [];\n\nasync function httpGet(url, accept = 'application/xml') {\n  try {\n    console.log(`Fetching: ${url.substring(0, 100)}...`);\n\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      timeout: 20000,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',\n        'Accept': accept,\n        'Accept-Language': 'es-ES,es;q=0.9',\n        'Referer': 'https://ovc.catastro.meh.es/OVCServWeb/'\n      },\n      encoding: 'utf8'\n    });\n\n    return response;\n  } catch (error) {\n    console.error(`HTTP error: ${error.message}`);\n    return null;\n  }\n}\n\nfunction parseXMLValue(xml, tagName) {\n  const patterns = [\n    new RegExp(`<${tagName}[^>]*>([^<]*)</${tagName}>`, 'i'),\n    new RegExp(`<${tagName}[^>]*>\\s*<!\\[CDATA\\[([^\\]]+)\\]\\]>\\s*</${tagName}>`, 'i')\n  ];\n\n  for (const pattern of patterns) {\n    const match = String(xml || '').match(pattern);\n    if (match) return match[1].trim();\n  }\n\n  return null;\n}\n\nfunction extractBuildingRC(rc) {\n  if (!rc || typeof rc !== 'string') return null;\n  const clean = rc.trim().toUpperCase().replace(/[^0-9A-Z]/g, '');\n  return clean.length >= 14 ? clean.substring(0, 14) : null;\n}\n\nfunction extractAllRC(text) {\n  const pattern = /\b([0-9]{7}[A-Z0-9]{7,})\b/g;\n  const matches = String(text || '').match(pattern) || [];\n  return [...new Set(matches.map(extractBuildingRC).filter(Boolean))];\n}\n\nconsole.log('=== CATASTRO REFERENCE SEARCH ===');\nconsole.log('Coordinates:', lat, lon);\nconsole.log('Address:', parsedAddress.full_address);\n\ntry {\n  const srs = 'EPSG:4326';\n  const url = `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCatastro/OVCCoordenadas.svc/Consulta_RCCOOR?format=XML&SRS=${srs}&Coordenada_X=${lon}&Coordenada_Y=${lat}`;\n  const xml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n  if (xml) {\n    const errorCode = parseXMLValue(xml, 'err') || parseXMLValue(xml, 'codigo');\n    const errorMsg = parseXMLValue(xml, 'des') || parseXMLValue(xml, 'descripcion');\n\n    if (!errorCode || errorCode === '0') {\n      const rc1 = parseXMLValue(xml, 'rc') || parseXMLValue(xml, 'refcat');\n      const pc1 = parseXMLValue(xml, 'pc1') || parseXMLValue(xml, 'pc');\n      const rcList = extractAllRC(xml);\n\n      for (const rc of [rc1, pc1, ...rcList]) {\n        const buildingRC = extractBuildingRC(rc);\n        if (buildingRC && !allReferences.some(r => r.ref === buildingRC)) {\n          allReferences.push({\n            ref: buildingRC,\n            source: 'Consulta_RCCOOR',\n            method: 'coordinates',\n            priority: 1\n          });\n        }\n      }\n    } else {\n      console.log(`Consulta_RCCOOR error: ${errorCode} - ${errorMsg}`);\n    }\n  }\n} catch (error) {\n  console.error('RCCOOR error:', error.message);\n}\n\nif (allReferences.length === 0) {\n  const distances = [50, 100, 200];\n\n  for (const dist of distances) {\n    try {\n      const url = `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCatastro/OVCCoordenadas.svc/Consulta_RCCOOR_Distancia?format=XML&SRS=EPSG:4326&Coordenada_X=${lon}&Coordenada_Y=${lat}&Distancia=${dist}`;\n      const xml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n      if (xml) {\n        const rcList = extractAllRC(xml);\n\n        if (rcList.length > 0) {\n          for (const rc of rcList) {\n            if (!allReferences.some(r => r.ref === rc)) {\n              allReferences.push({\n                ref: rc,\n                source: `RCCOOR_Distancia_${dist}m`,\n                method: 'nearby',\n                priority: 2\n              });\n            }\n          }\n          break;\n        }\n      }\n    } catch (error) {\n      console.error(`RCCOOR_Distancia ${dist} error:`, error.message);\n    }\n  }\n}\n\nif (allReferences.length === 0 && parsedAddress.street_name && parsedAddress.city) {\n  try {\n    const tipoViaMap = {\n      'calle': 'CL', 'avenida': 'AV', 'plaza': 'PZ', 'paseo': 'PS',\n      'carretera': 'CR', 'camino': 'CM', 'glorieta': 'GL', 'ronda': 'RD',\n      'travesia': 'TV', 'travesía': 'TV'\n    };\n\n    const tipoVia = tipoViaMap[parsedAddress.street_type?.toLowerCase()] || 'CL';\n    const provincia = parsedAddress.provincia || '';\n    const municipio = parsedAddress.city || '';\n    const nombreVia = parsedAddress.street_name || '';\n    const numero = parsedAddress.house_number || '';\n\n    const url = `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejero.svc/Consulta_DNPPP?format=XML&Provincia=${encodeURIComponent(provincia.toUpperCase())}&Municipio=${encodeURIComponent(municipio.toUpperCase())}&TipoVia=${tipoVia}&NombreVia=${encodeURIComponent(nombreVia.toUpperCase())}&Numero=${numero}`;\n\n    const xml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n    if (xml) {\n      const rcList = extractAllRC(xml);\n\n      for (const rc of rcList) {\n        if (!allReferences.some(r => r.ref === rc)) {\n          allReferences.push({\n            ref: rc,\n            source: 'Consulta_DNPPP',\n            method: 'address',\n            priority: 3\n          });\n        }\n      }\n    }\n  } catch (error) {\n    console.error('DNPPP error:', error.message);\n  }\n}\n\nif (allReferences.length === 0) {\n  const pads = [0.0005, 0.001, 0.002];\n\n  for (const pad of pads) {\n    try {\n      const bbox = `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`;\n      const url = `https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx?service=WMS&request=GetFeatureInfo&version=1.3.0&CRS=EPSG:4326&LAYERS=CP.CadastralParcel&QUERY_LAYERS=CP.CadastralParcel&WIDTH=101&HEIGHT=101&I=50&J=50&BBOX=${bbox}&INFO_FORMAT=text/plain`;\n      const response = await httpGet(url, 'text/plain,*/*');\n\n      if (response) {\n        const lines = String(response).split(/\r?\n/);\n\n        for (const line of lines) {\n          const parts = line.split('\t');\n          if (parts.length >= 2 && /nationalCadastralReference/i.test(parts[0])) {\n            const rc = extractBuildingRC(parts[1]);\n            if (rc && !allReferences.some(r => r.ref === rc)) {\n              allReferences.push({\n                ref: rc,\n                source: `WMS_${pad}`,\n                method: 'wms',\n                priority: 4\n              });\n            }\n          }\n        }\n\n        if (allReferences.length > 0) break;\n      }\n    } catch (error) {\n      console.error(`WMS ${pad} error:`, error.message);\n    }\n  }\n}\n\nif (allReferences.length === 0) {\n  try {\n    const pad = 0.01;\n    const bbox = `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`;\n    const url = `https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx?service=WFS&version=2.0.0&request=GetFeature&storedquery_id=GetBuildingsByBBOX&BBOX=${bbox},EPSG:4326`;\n    const gml = await httpGet(url, 'application/xml,application/gml+xml,*/*');\n\n    if (gml) {\n      const matches = String(gml).match(/ES\\.SDGC\\.BU\\.([0-9A-Z]{14,})/gi) || [];\n\n      for (const match of matches) {\n        const rc = extractBuildingRC(match.replace(/^ES\\.SDGC\\.BU\\./i, ''));\n        if (rc && !allReferences.some(r => r.ref === rc)) {\n          allReferences.push({\n            ref: rc,\n            source: 'WFS_BBOX',\n            method: 'wfs',\n            priority: 5\n          });\n        }\n      }\n    }\n  } catch (error) {\n    console.error('WFS error:', error.message);\n  }\n}\n\nif (allReferences.length === 0) {\n  return [{\n    json: {\n      success: false,\n      error: 'No se encontró referencia catastral',\n      direccion: direccionOriginal,\n      parsed_address: parsedAddress,\n      methods_attempted: [\n        'Consulta_RCCOOR',\n        'Consulta_RCCOOR_Distancia',\n        'Consulta_DNPPP',\n        'WMS_GetFeatureInfo',\n        'WFS_BBOX'\n      ],\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\nconst uniqueRefs = new Map();\nfor (const ref of allReferences) {\n  if (!uniqueRefs.has(ref.ref) || uniqueRefs.get(ref.ref).priority > ref.priority) {\n    uniqueRefs.set(ref.ref, ref);\n  }\n}\n\nconst sorted = Array.from(uniqueRefs.values()).sort((a, b) => a.priority - b.priority);\n\nreturn sorted.map(ref => ({\n  json: {\n    direccion: direccionOriginal,\n    parsed_address: parsedAddress,\n    referencia_catastral: ref.ref,\n    lat: parsedAddress.lat,\n    lon: parsedAddress.lon,\n    rc_source: ref.source,\n    rc_method: ref.method,\n    priority: ref.priority,\n    success: true\n  }\n}));\n"
+      },
+      "id": "find_reference",
+      "name": "Find Cadastral Reference",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Get detailed cadastral data for a reference\nconst refCat = $input.first().json.referencia_catastral;\nconst lat = parseFloat($input.first().json.lat);\nconst lon = parseFloat($input.first().json.lon);\nconst direccion = $input.first().json.direccion;\nconst parsedAddress = $input.first().json.parsed_address;\n\nif (!refCat) {\n  throw new Error('No cadastral reference available');\n}\n\nconst datos = {\n  success: true,\n  direccion,\n  referencia_catastral: refCat,\n  lat: lat.toFixed(7),\n  lon: lon.toFixed(7),\n  parsed_address: parsedAddress\n};\n\nconst dataSources = [];\n\nasync function httpGet(url, accept = 'application/xml') {\n  try {\n    console.log(`Fetching: ${url.substring(0, 80)}...`);\n\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      timeout: 20000,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 n8n-catastro/4.0',\n        'Accept': accept,\n        'Referer': 'https://ovc.catastro.meh.es/OVCServWeb/'\n      },\n      encoding: 'utf8'\n    });\n\n    return response;\n  } catch (error) {\n    console.error(`HTTP error: ${error.message}`);\n    return null;\n  }\n}\n\nfunction parseXMLValue(xml, tagName) {\n  const patterns = [\n    new RegExp(`<${tagName}[^>]*>([^<]*)</${tagName}>`, 'i'),\n    new RegExp(`<${tagName}[^>]*>\\s*<!\\[CDATA\\[([^\\]]+)\\]\\]>\\s*</${tagName}>`, 'i')\n  ];\n\n  for (const pattern of patterns) {\n    const match = String(xml || '').match(pattern);\n    if (match && match[1]) return match[1].trim();\n  }\n\n  return null;\n}\n\nfunction parseHTMLTable(html) {\n  const data = {};\n  const str = String(html || '');\n\n  const rowRegex = /<tr[^>]*>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>\\s*<\\/tr>/gi;\n  const stripHTML = (s) => String(s || '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&nbsp;/gi, ' ')\n    .replace(/&[a-z]+;/gi, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  let match;\n  while ((match = rowRegex.exec(str))) {\n    const key = stripHTML(match[1]);\n    const value = stripHTML(match[2]);\n    if (key && value) data[key] = value;\n  }\n\n  const inspireMatch = str.match(/ES\\.SDGC\\.BU\\.([0-9A-Z]+)/i);\n  if (inspireMatch) data.inspireId = 'ES.SDGC.BU.' + inspireMatch[1];\n\n  return data;\n}\n\nfunction toNumber(value) {\n  if (value == null) return null;\n  const cleaned = String(value)\n    .replace(/[^0-9.,]/g, '')\n    .replace(',', '.');\n  const num = parseFloat(cleaned);\n  return Number.isFinite(num) ? num : null;\n}\n\nconsole.log('=== FETCHING CATASTRO DATA ===');\nconsole.log('Reference:', refCat);\n\ntry {\n  const url = `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCatastro/OVCCoordenadas.svc/Consulta_CPMRC?format=XML&Provincia=&Municipio=&RC=${refCat}`;\n  const xml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n  if (xml) {\n    dataSources.push({ source: 'Consulta_CPMRC' });\n\n    const coordX = parseXMLValue(xml, 'xcen') || parseXMLValue(xml, 'coordenada_x');\n    const coordY = parseXMLValue(xml, 'ycen') || parseXMLValue(xml, 'coordenada_y');\n    const address = parseXMLValue(xml, 'ldt') || parseXMLValue(xml, 'direccion');\n    const provincia = parseXMLValue(xml, 'np') || parseXMLValue(xml, 'provincia');\n    const municipio = parseXMLValue(xml, 'nm') || parseXMLValue(xml, 'municipio');\n\n    if (coordX && coordY) {\n      datos.coord_x_catastro = parseFloat(coordX);\n      datos.coord_y_catastro = parseFloat(coordY);\n    }\n    if (address) datos.direccion_catastro = address;\n    if (provincia) datos.provincia = provincia;\n    if (municipio) datos.municipio = municipio;\n  }\n} catch (error) {\n  console.error('CPMRC error:', error.message);\n}\n\ntry {\n  const url = `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejero.svc/Consulta_DNPRC?format=XML&Provincia=&Municipio=&RC=${refCat}`;\n  const xml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n  if (xml) {\n    dataSources.push({ source: 'Consulta_DNPRC' });\n\n    const supConst = parseXMLValue(xml, 'sfc') || parseXMLValue(xml, 'sc');\n    const supParcela = parseXMLValue(xml, 'sfs') || parseXMLValue(xml, 'sp');\n    const clase = parseXMLValue(xml, 'locs') || parseXMLValue(xml, 'clase');\n    const uso = parseXMLValue(xml, 'lous') || parseXMLValue(xml, 'uso');\n    const ano = parseXMLValue(xml, 'ant') || parseXMLValue(xml, 'anio');\n\n    if (supConst) datos.superficie_construida_catastro = Math.round(toNumber(supConst));\n    if (supParcela) datos.superficie_parcela_m2 = Math.round(toNumber(supParcela));\n    if (clase) datos.clase = clase;\n    if (uso) datos.uso = uso;\n    if (ano) datos.ano_construccion = ano;\n  }\n} catch (error) {\n  console.error('DNPRC error:', error.message);\n}\n\ntry {\n  const pad = 0.00055;\n  const bbox = `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`;\n  const url = `https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx?service=WMS&request=GetFeatureInfo&version=1.3.0&CRS=EPSG:4326&LAYERS=BU.Building&QUERY_LAYERS=BU.Building&WIDTH=101&HEIGHT=101&I=50&J=50&BBOX=${bbox}&INFO_FORMAT=text/html`;\n  const html = await httpGet(url, 'text/html,*/*');\n\n  if (html) {\n    dataSources.push({ source: 'WMS_Building' });\n\n    const data = parseHTMLTable(html);\n\n    const dwellings = toNumber(data['numberOfDwellings'] || data['Number of Dwellings']);\n    const units = toNumber(data['numberOfBuildingUnits'] || data['Number of Building Units']);\n    const officialArea = toNumber(data['OfficialArea'] || data['grossFloorArea']);\n    const floorsAbove = toNumber(data['numberOfFloorsAboveGround'] || data['Floors Above Ground']);\n    const floorsTotal = toNumber(data['numberOfFloors'] || data['Number of Floors']);\n\n    if (dwellings) datos.numero_viviendas = Math.round(dwellings);\n    if (units && dwellings) {\n      const nonResidential = units - dwellings;\n      if (nonResidential > 0) datos.numero_locales = Math.round(nonResidential);\n    }\n    if (officialArea) datos.superficie_oficial_m2 = Math.round(officialArea);\n    if (floorsAbove) datos.alturas = Math.round(floorsAbove);\n    else if (floorsTotal) datos.alturas = Math.round(floorsTotal);\n\n    if (data.inspireId) datos.inspire_id = data.inspireId;\n  }\n} catch (error) {\n  console.error('WMS error:', error.message);\n}\n\nif (!datos.alturas) {\n  const urls = [\n    `https://ovc.catastro.meh.es/OVCServWeb/INSPIRE/Buildings/ES.SDGC.BU.${refCat}.gml`,\n    `https://ovc.catastro.meh.es/OVCServWeb/CYCBienInmueble/OVCConCiud.aspx?del=&mun=&RefC=${refCat}&rc1=&rc2=`\n  ];\n\n  for (const url of urls) {\n    try {\n      const gml = await httpGet(url, 'application/xml,text/xml,text/html,*/*');\n\n      if (gml && /<gml:|<bu:|numberOfFloors/i.test(gml)) {\n        dataSources.push({ source: 'INSPIRE_GML' });\n\n        const floorMatches = String(gml).match(/<(?:[^:]+:)?numberOfFloorsAboveGround[^>]*>([^<]+)</i);\n        if (floorMatches) {\n          const floors = toNumber(floorMatches[1]);\n          if (floors) {\n            datos.alturas = Math.round(floors);\n            break;\n          }\n        }\n\n        const totalFloorMatches = String(gml).match(/<(?:[^:]+:)?numberOfFloors[^>]*>([^<]+)</i);\n        if (totalFloorMatches) {\n          const floors = toNumber(totalFloorMatches[1]);\n          if (floors) {\n            datos.alturas = Math.round(floors);\n            break;\n          }\n        }\n      }\n    } catch (error) {\n      continue;\n    }\n  }\n}\n\nif (datos.superficie_parcela_m2 && datos.superficie_parcela_m2 > 0) {\n  const area = datos.superficie_parcela_m2;\n  const width = Math.sqrt(area * 2 / 3);\n  const length = area / width;\n  datos.perimetro_parcela_m = Math.round((width + length) * 2);\n}\n\nif (refCat) {\n  datos.url_consulta = `https://ovc.catastro.meh.es/OVCServWeb/CYCBienInmueble/OVCConCiud.aspx?RefC=${refCat}`;\n}\n\ndatos.data_sources = dataSources;\n\nreturn { json: datos };\n"
+      },
+      "id": "get_catastro_data",
+      "name": "Get Catastro Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Retrieve building footprint geometry\nconst datos = $input.first().json;\nconst refCat = datos.referencia_catastral;\nconst lat = parseFloat(datos.lat);\nconst lon = parseFloat(datos.lon);\nconst inspireId = datos.inspire_id;\n\nlet area = 0;\nlet perimeter = 0;\nconst geometrySources = [];\n\nfunction bbox(lat, lon, pad = 0.00055) {\n  return `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`;\n}\n\nasync function httpGet(url, accept = 'application/xml', method = 'GET', body = null) {\n  try {\n    const options = {\n      method,\n      url,\n      timeout: 25000,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 n8n-catastro/4.0',\n        'Accept': accept,\n        'Referer': 'https://ovc.catastro.meh.es/'\n      },\n      encoding: 'utf8'\n    };\n\n    if (body) {\n      options.body = body;\n      options.headers['Content-Type'] = 'text/plain';\n    }\n\n    return await this.helpers.httpRequest(options);\n  } catch (error) {\n    console.error(`HTTP error: ${error.message}`);\n    return null;\n  }\n}\n\nfunction parsePosList(gml) {\n  const polygons = [];\n  const regex = /<gml:posList[^>]*>([\\s\\S]*?)<\\/gml:posList>/gi;\n\n  let match;\n  while ((match = regex.exec(String(gml || '')))) {\n    const coords = match[1]\n      .trim()\n      .split(/\\s+/)\n      .map(Number)\n      .filter(Number.isFinite);\n\n    if (coords.length < 6) continue;\n\n    const step = coords.length % 3 === 0 ? 3 : 2;\n    const points = [];\n\n    for (let i = 0; i + (step - 1) < coords.length; i += step) {\n      points.push([coords[i], coords[i + 1]]);\n    }\n\n    if (points.length >= 3) {\n      polygons.push(points);\n    }\n  }\n\n  return polygons;\n}\n\nfunction calculateXY(points) {\n  let A = 0;\n  let P = 0;\n\n  for (let i = 0; i < points.length; i++) {\n    const [x1, y1] = points[i];\n    const [x2, y2] = points[(i + 1) % points.length];\n    A += x1 * y2 - x2 * y1;\n    P += Math.hypot(x2 - x1, y2 - y1);\n  }\n\n  return {\n    area: Math.abs(A) / 2,\n    perimeter: P\n  };\n}\n\nfunction projectUTM(lon, lat) {\n  const a = 6378137;\n  const f = 1 / 298.257222101;\n  const k0 = 0.9996;\n  const e = Math.sqrt(2 * f - f * f);\n  const lon0 = -3 * Math.PI / 180;\n\n  const lonRad = lon * Math.PI / 180;\n  const latRad = lat * Math.PI / 180;\n\n  const N = a / Math.sqrt(1 - e * e * Math.sin(latRad) ** 2);\n  const T = Math.tan(latRad) ** 2;\n  const C = (e * e / (1 - e * e)) * Math.cos(latRad) ** 2;\n  const A = (lonRad - lon0) * Math.cos(latRad);\n\n  const M = a * (\n    (1 - e * e / 4 - 3 * e ** 4 / 64 - 5 * e ** 6 / 256) * latRad -\n    (3 * e * e / 8 + 3 * e ** 4 / 32 + 45 * e ** 6 / 1024) * Math.sin(2 * latRad) +\n    (15 * e ** 4 / 256 + 45 * e ** 6 / 1024) * Math.sin(4 * latRad) -\n    (35 * e ** 6 / 3072) * Math.sin(6 * latRad)\n  );\n\n  const x = k0 * N * (\n    A + (1 - T + C) * A ** 3 / 6 +\n    (5 - 18 * T + T ** 2 + 72 * C - 58 * (e ** 2 / (1 - e ** 2))) * A ** 5 / 120\n  ) + 500000;\n\n  const y = k0 * (\n    M + N * Math.tan(latRad) * (\n      A ** 2 / 2 +\n      (5 - T + 9 * C + 4 * C ** 2) * A ** 4 / 24 +\n      (61 - 58 * T + T ** 2 + 600 * C - 330 * (e ** 2 / (1 - e ** 2))) * A ** 6 / 720\n    )\n  );\n\n  return { x, y };\n}\n\nfunction calculateLatLon(points) {\n  const projected = points.map(p => projectUTM(p.lon, p.lat));\n\n  let A = 0;\n  let P = 0;\n\n  for (let i = 0; i < projected.length; i++) {\n    const p1 = projected[i];\n    const p2 = projected[(i + 1) % projected.length];\n    A += p1.x * p2.y - p2.x * p1.y;\n    P += Math.hypot(p2.x - p1.x, p2.y - p1.y);\n  }\n\n  return {\n    area: Math.abs(A) / 2,\n    perimeter: P\n  };\n}\n\nconsole.log('=== GEOMETRY EXTRACTION ===');\nconsole.log('Reference:', refCat);\n\nif (inspireId) {\n  const endpoints = [\n    `https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx`,\n    `https://ovc.catastro.meh.es/INSPIRE/wfsbu.aspx`\n  ];\n\n  for (const baseUrl of endpoints) {\n    try {\n      const url = `${baseUrl}?service=WFS&version=2.0.0&request=GetFeature&storedquery_id=GetBuilding&inspireId=${encodeURIComponent(inspireId)}`;\n      const gml = await httpGet(url, 'application/xml,application/gml+xml,*/*');\n\n      if (gml && /<gml:/i.test(gml)) {\n        const polygons = parsePosList(gml);\n\n        if (polygons.length > 0) {\n          for (const poly of polygons) {\n            const geom = calculateXY(poly);\n            area += geom.area;\n            perimeter += geom.perimeter;\n          }\n\n          if (area > 0) {\n            geometrySources.push({ source: 'WFS_Building' });\n            break;\n          }\n        }\n      }\n    } catch (error) {\n      continue;\n    }\n  }\n}\n\nif (!(area > 0) && refCat) {\n  const urls = [\n    `https://ovc.catastro.meh.es/OVCServWeb/INSPIRE/Buildings/ES.SDGC.BU.${refCat}.gml`,\n    `http://www1.sedecatastro.gob.es/INSPIRE/Buildings/ES.SDGC.BU.${refCat}.gml`\n  ];\n\n  for (const url of urls) {\n    try {\n      const gml = await httpGet(url, 'application/xml,text/xml,*/*');\n\n      if (gml && /<gml:/i.test(gml)) {\n        const posListRegex = /<gml:posList[^>]*>([\\s\\S]*?)<\\/gml:posList>/gi;\n        let match;\n\n        while ((match = posListRegex.exec(gml))) {\n          const coords = match[1]\n            .trim()\n            .split(/\\s+/)\n            .map(Number)\n            .filter(Number.isFinite);\n\n          if (coords.length >= 6) {\n            const points = [];\n            for (let i = 0; i + 1 < coords.length; i += 2) {\n              points.push({ lat: coords[i], lon: coords[i + 1] });\n            }\n\n            if (points.length >= 3) {\n              const geom = calculateLatLon(points);\n              area += geom.area;\n              perimeter += geom.perimeter;\n            }\n          }\n        }\n\n        if (area > 0) {\n          geometrySources.push({ source: 'INSPIRE_Static' });\n          break;\n        }\n      }\n    } catch (error) {\n      continue;\n    }\n  }\n}\n\nif (!(area > 0)) {\n  try {\n    const url = `https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx?service=WMS&request=GetFeatureInfo&version=1.3.0&CRS=EPSG:4326&LAYERS=BU.Building&QUERY_LAYERS=BU.Building&WIDTH=101&HEIGHT=101&I=50&J=50&BBOX=${bbox(lat, lon)}&INFO_FORMAT=application/vnd.ogc.gml`;\n    const gml = await httpGet(url, 'application/vnd.ogc.gml,application/xml,*/*');\n\n    if (gml) {\n      const polygons = parsePosList(gml);\n\n      for (const poly of polygons) {\n        const geom = calculateXY(poly);\n        area += geom.area;\n        perimeter += geom.perimeter;\n      }\n\n      if (area > 0) {\n        geometrySources.push({ source: 'WMS_GML' });\n      }\n    }\n  } catch (error) {\n    console.error('WMS GML error:', error.message);\n  }\n}\n\nif (!(area > 0)) {\n  try {\n    const query = `[out:json][timeout:20];\n      way(around:100,${lat},${lon})[\"building\"];\n      (._;>;);\n      out;`;\n\n    const response = await httpGet('https://overpass-api.de/api/interpreter', 'application/json', 'POST', query);\n\n    if (response) {\n      const data = typeof response === 'string' ? JSON.parse(response) : response;\n\n      if (data?.elements) {\n        const nodes = new Map();\n        let building = null;\n\n        for (const el of data.elements) {\n          if (el.type === 'node') {\n            nodes.set(el.id, { lat: el.lat, lon: el.lon });\n          } else if (el.type === 'way' && el.tags?.building && !building) {\n            building = el;\n          }\n        }\n\n        if (building?.nodes) {\n          const points = building.nodes\n            .map(id => nodes.get(id))\n            .filter(Boolean);\n\n          if (points.length >= 3) {\n            const geom = calculateLatLon(points);\n            area = geom.area;\n            perimeter = geom.perimeter;\n            geometrySources.push({ source: 'OpenStreetMap' });\n          }\n        }\n      }\n    }\n  } catch (error) {\n    console.error('OSM error:', error.message);\n  }\n}\n\nif (area > 0) {\n  datos.superficie_construida_m2 = Math.round(area);\n}\n\nif (perimeter > 0) {\n  datos.perimetro_m = Math.round(perimeter);\n}\n\nif (geometrySources.length > 0) {\n  datos.geometry_sources = geometrySources;\n}\n\nreturn { json: datos };\n"
+      },
+      "id": "get_geometry",
+      "name": "Get Geometry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Calculate number of floors\nconst datos = $input.first().json;\n\nconst floorsSources = [];\n\nif (datos.alturas && Number.isFinite(datos.alturas)) {\n  datos.alturas = Math.max(1, Math.min(50, Math.round(datos.alturas)));\n  floorsSources.push({ source: 'catastro_direct', value: datos.alturas });\n}\n\nif ((!datos.alturas || datos.alturas === 0) && datos.superficie_oficial_m2 && datos.superficie_construida_m2) {\n  const oficialArea = datos.superficie_oficial_m2;\n  const footprintArea = datos.superficie_construida_m2;\n\n  if (footprintArea > 10) {\n    const ratio = oficialArea / footprintArea;\n\n    if (ratio >= 0.7 && ratio <= 50) {\n      datos.alturas = Math.max(1, Math.round(ratio));\n      datos.alturas_estimadas = true;\n      floorsSources.push({\n        source: 'calculated_ratio',\n        value: datos.alturas,\n        formula: `${oficialArea} / ${footprintArea} = ${ratio.toFixed(2)}`\n      });\n    }\n  }\n}\n\nif ((!datos.alturas || datos.alturas === 0) && datos.numero_viviendas && datos.numero_viviendas > 0) {\n  const dwellings = datos.numero_viviendas;\n  let estimated = 2;\n\n  if (dwellings === 1) {\n    estimated = 2;\n  } else if (dwellings <= 4) {\n    estimated = dwellings;\n  } else if (dwellings <= 8) {\n    estimated = Math.ceil(dwellings / 2);\n  } else if (dwellings <= 20) {\n    estimated = Math.ceil(dwellings / 3);\n  } else {\n    estimated = Math.min(10, Math.ceil(dwellings / 4));\n  }\n\n  datos.alturas = estimated;\n  datos.alturas_estimadas = true;\n  floorsSources.push({\n    source: 'estimated_dwellings',\n    value: estimated,\n    dwellings\n  });\n}\n\nif (!datos.alturas || datos.alturas === 0) {\n  datos.alturas = 2;\n  datos.alturas_estimadas = true;\n  floorsSources.push({\n    source: 'default',\n    value: 2\n  });\n}\n\ndatos.alturas = Math.max(1, Math.min(50, datos.alturas));\n\nif (floorsSources.length > 0) {\n  datos.floors_sources = floorsSources;\n}\n\nreturn { json: datos };\n"
+      },
+      "id": "calculate_floors",
+      "name": "Calculate Floors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Deduplicate and rank results\nconst items = $input.all();\n\nif (items.length === 0) {\n  throw new Error('No results to process');\n}\n\nconst grouped = new Map();\n\nfor (const item of items) {\n  const data = item.json;\n\n  if (!data.referencia_catastral) continue;\n\n  const key = `${parseFloat(data.lat).toFixed(5)}_${parseFloat(data.lon).toFixed(5)}`;\n\n  if (!grouped.has(key)) {\n    grouped.set(key, []);\n  }\n\n  grouped.get(key).push(data);\n}\n\nconst results = [];\n\nfor (const [key, group] of grouped.entries()) {\n  group.sort((a, b) => (a.priority || 999) - (b.priority || 999));\n\n  const best = { ...group[0] };\n\n  if (group.length > 1) {\n    best.alternative_references = group.slice(1).map(g => ({\n      referencia_catastral: g.referencia_catastral,\n      source: g.rc_source,\n      priority: g.priority\n    }));\n  }\n\n  results.push(best);\n}\n\nreturn results.map(r => ({ json: r }));\n"
+      },
+      "id": "deduplicate",
+      "name": "Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Format final response\nconst items = $input.all();\n\nif (items.length === 0) {\n  throw new Error('No se pudieron formatear los datos');\n}\n\nconst result = items[0].json;\n\nif (!result.success || result.error) {\n  return {\n    json: {\n      success: false,\n      error: result.error || 'Error desconocido',\n      direccion: result.direccion,\n      parsed_address: result.parsed_address,\n      timestamp: new Date().toISOString()\n    }\n  };\n}\n\nconst lines = [];\n\nlines.push('📍 **' + (result.direccion_catastro || result.direccion) + '**');\nlines.push('');\n\nconst pa = result.parsed_address;\nif (pa) {\n  lines.push('🗺️ **Dirección Parseada:**');\n\n  if (pa.street_type && pa.street_name) {\n    const streetType = pa.street_type.charAt(0).toUpperCase() + pa.street_type.slice(1);\n    const houseNum = pa.house_number ? ` ${pa.house_number}` : '';\n    lines.push(`• ${streetType} ${pa.street_name}${houseNum}`);\n  }\n\n  if (pa.city) lines.push(`• ${pa.city}`);\n  if (pa.provincia) lines.push(`• Provincia: ${pa.provincia}`);\n  if (pa.postcode) lines.push(`• CP: ${pa.postcode}`);\n  lines.push(`• Fuente: ${pa.source}`);\n  lines.push('');\n}\n\nif (result.provincia || result.municipio) {\n  const parts = [];\n  if (result.municipio) parts.push(result.municipio);\n  if (result.provincia) parts.push(result.provincia);\n  lines.push('📌 ' + parts.join(', '));\n  lines.push('');\n}\n\nlines.push('📊 **Datos del Catastro:**');\n\nif (result.superficie_construida_m2) {\n  lines.push(`• Superficie construida (huella): ${result.superficie_construida_m2.toLocaleString()} m²`);\n}\n\nif (result.superficie_construida_catastro) {\n  lines.push(`• Superficie construida (catastro): ${result.superficie_construida_catastro.toLocaleString()} m²`);\n}\n\nif (result.superficie_oficial_m2) {\n  lines.push(`• Superficie oficial total: ${result.superficie_oficial_m2.toLocaleString()} m²`);\n}\n\nif (result.superficie_parcela_m2) {\n  lines.push(`• Superficie de parcela: ${result.superficie_parcela_m2.toLocaleString()} m²`);\n}\n\nif (result.perimetro_m) {\n  lines.push(`• Perímetro: ${result.perimetro_m.toLocaleString()} m`);\n}\n\nif (result.perimetro_parcela_m) {\n  lines.push(`• Perímetro estimado de parcela: ${result.perimetro_parcela_m.toLocaleString()} m`);\n}\n\nif (result.alturas) {\n  const estimated = result.alturas_estimadas ? ' (estimado)' : '';\n  lines.push(`• Plantas: ${result.alturas}${estimated}`);\n}\n\nif (result.clase) lines.push(`• Clase: ${result.clase}`);\nif (result.uso) lines.push(`• Uso: ${result.uso}`);\nif (result.ano_construccion) lines.push(`• Año construcción: ${result.ano_construccion}`);\nif (result.numero_viviendas) lines.push(`• Viviendas: ${result.numero_viviendas}`);\nif (result.numero_locales) lines.push(`• Locales: ${result.numero_locales}`);\n\nlines.push('');\n\nif (result.referencia_catastral && result.referencia_catastral !== 'undefined') {\n  lines.push('🔗 **Referencia Catastral:** ' + result.referencia_catastral);\n} else {\n  lines.push('⚠️ **Referencia catastral no encontrada**');\n}\n\nif (result.alternative_references && result.alternative_references.length > 0) {\n  lines.push(`   (${result.alternative_references.length} referencias alternativas disponibles)`);\n}\n\nif (result.inspire_id) {\n  lines.push(`**INSPIRE ID:** ${result.inspire_id}`);\n}\n\nlines.push('');\n\nif (result.data_sources && result.data_sources.length > 0) {\n  const sources = result.data_sources.map(s => s.source).join(', ');\n  lines.push(`_Fuentes de datos: ${sources}_`);\n}\n\nif (result.geometry_sources && result.geometry_sources.length > 0) {\n  const geomSources = result.geometry_sources.map(s => s.source).join(', ');\n  lines.push(`_Geometría: ${geomSources}_`);\n}\n\nif (result.floors_sources && result.floors_sources.length > 0) {\n  const floorSources = result.floors_sources.map(s => s.source).join(', ');\n  lines.push(`_Alturas: ${floorSources}_`);\n}\n\nlines.push('');\nlines.push('_Workflow v1.0 - Catastro API n8n_');\n\nconst formattedText = lines.join('\n');\n\nconst response = {\n  success: true,\n  data: {\n    direccion: result.direccion_catastro || result.direccion,\n    direccion_parseada: result.parsed_address,\n    referencia_catastral: result.referencia_catastral || null,\n    alternative_references: result.alternative_references || [],\n    inspire_id: result.inspire_id || null,\n    ubicacion: {\n      provincia: result.provincia,\n      municipio: result.municipio,\n      coordenadas: {\n        lat: parseFloat(result.lat),\n        lon: parseFloat(result.lon)\n      }\n    },\n    superficies: {\n      construida_m2: result.superficie_construida_m2 || null,\n      construida_catastro_m2: result.superficie_construida_catastro || null,\n      oficial_m2: result.superficie_oficial_m2 || null,\n      parcela_m2: result.superficie_parcela_m2 || null,\n      perimetro_m: result.perimetro_m || null,\n      perimetro_parcela_m: result.perimetro_parcela_m || null\n    },\n    caracteristicas: {\n      alturas: result.alturas || null,\n      alturas_estimadas: result.alturas_estimadas || false,\n      clase: result.clase || null,\n      uso: result.uso || null,\n      ano_construccion: result.ano_construccion || null,\n      numero_viviendas: result.numero_viviendas || null,\n      numero_locales: result.numero_locales || null\n    },\n    url_consulta: result.url_consulta || null\n  },\n  metadata: {\n    workflow_version: 'v1.0',\n    data_sources: result.data_sources || [],\n    geometry_sources: result.geometry_sources || [],\n    floors_sources: result.floors_sources || [],\n    rc_source: result.rc_source,\n    rc_method: result.rc_method,\n    geocode_source: result.parsed_address?.source,\n    timestamp: new Date().toISOString()\n  },\n  formatted_text: formattedText\n};\n\nreturn { json: response };\n"
+      },
+      "id": "format_response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Error handler\nconst error = $input.first().json;\n\nconst errorResponse = {\n  success: false,\n  error: {\n    message: error.message || error.error || 'Error desconocido',\n    type: error.name || 'WorkflowError',\n    details: error.description || null\n  },\n  metadata: {\n    workflow_version: 'v1.0',\n    timestamp: new Date().toISOString()\n  },\n  formatted_text: `❌ **Error**\n\n${error.message || error.error || 'Ha ocurrido un error procesando la solicitud.'}\n\n_Por favor, verifica la dirección e intenta nuevamente._`\n};\n\nreturn { json: errorResponse };\n"
+      },
+      "id": "error_handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Geocode Address",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Geocode Address": {
+      "main": [
+        [
+          {
+            "node": "Find Cadastral Reference",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Cadastral Reference": {
+      "main": [
+        [
+          {
+            "node": "Get Catastro Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Catastro Data": {
+      "main": [
+        [
+          {
+            "node": "Get Geometry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Geometry": {
+      "main": [
+        [
+          {
+            "node": "Calculate Floors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Floors": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
