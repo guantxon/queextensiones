@@ -1,0 +1,1215 @@
+{
+  "name": "🎯 Main Router - WhatsApp",
+  "nodes": [
+    {
+      "id": "whatsapp_trigger",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -3568,
+        -288
+      ],
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "webhookId": "whatsapp-main-router",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "l1oZAIL6uFnIFVcq",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "normalize_event",
+      "name": "Normalize Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3344,
+        -288
+      ],
+      "parameters": {
+        "jsCode": "const event = $json;\nconst entry = event.entry?.[0]?.changes?.[0]?.value || event.value || {};\nconst messages = entry.messages || event.messages || [];\nconst message = messages[0] || {};\nconst contacts = entry.contacts || event.contacts || [];\nconst contact = contacts[0] || {};\nconst from = message.from || contact.wa_id || event.from || '';\nconst chatId = from || '';\nconst profileName = contact.profile?.name || '';\nconst timestamp = Number(message.timestamp || Math.floor(Date.now() / 1000));\n\nreturn {\n  json: {\n    rawEvent: event,\n    entry,\n    message,\n    contact,\n    from,\n    chatId,\n    profileName,\n    timestamp,\n    messageId: message.id || null,\n    messageType: message.type || ''\n  }\n};"
+      }
+    },
+    {
+      "id": "is_button_reply",
+      "name": "Is Button Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3120,
+        -288
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "button-check",
+              "leftValue": "={{ $json.messageType === 'interactive' && ($json.message?.interactive?.button_reply !== undefined || $json.message?.interactive?.list_reply !== undefined) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "process_button_reply",
+      "name": "Process Button Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        -672
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst interactive = data.message?.interactive || {};\nconst button = interactive.button_reply || interactive.list_reply || {};\nconst id = button.id || button.payload || '';\nconst title = button.title || button.description || '';\n\nreturn {\n  json: {\n    from: data.from,\n    chatId: data.chatId,\n    text: title || id,\n    type: 'callback',\n    routerCategory: id,\n    timestamp: data.timestamp,\n    messageId: data.messageId,\n    buttonReplyId: id || null,\n    rawEvent: data.rawEvent\n  }\n};"
+      }
+    },
+    {
+      "id": "detect_message_type",
+      "name": "Detect Message Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst message = data.message || {};\nlet type = message.type || 'other';\n\nif (type === 'interactive') {\n  type = message.interactive?.type || 'interactive';\n}\n\nreturn {\n  json: {\n    ...data,\n    messageType: type\n  }\n};"
+      }
+    },
+    {
+      "id": "is_text",
+      "name": "Is Text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        -480
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "text-condition-1",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "text",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_audio",
+      "name": "Is Audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2672,
+        -288
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "audio-condition-1",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "audio",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_photo",
+      "name": "Is Photo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2672,
+        -96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "photo-condition-1",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "image",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_document",
+      "name": "Is Document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2672,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "document-condition-1",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "document",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_location",
+      "name": "Is Location?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        288
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "location-condition-1",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "location",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "process_text",
+      "name": "Process Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        -480
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst message = data.message || {};\nconst body = message.text?.body || message.button?.text || '';\n\nreturn {\n  json: {\n    from: data.from,\n    chatId: data.chatId,\n    text: body,\n    type: 'text',\n    originalType: 'text',\n    timestamp: data.timestamp,\n    messageId: data.messageId,\n    rawEvent: data.rawEvent\n  }\n};"
+      }
+    },
+    {
+      "id": "download_voice_media",
+      "name": "Download Voice Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        -288
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst message = data.message || {};\nconst audio = message.audio || message.voice || {};\nconst mediaId = audio.id;\n\nif (!mediaId) {\n  return [{\n    json: {\n      ...data,\n      voiceFileId: '',\n      voiceMimeType: audio.mime_type || 'audio/ogg'\n    }\n  }];\n}\n\nconst meta = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: `https://graph.facebook.com/v19.0/${mediaId}`,\n  json: true,\n});\n\nconst fileBuffer = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: meta.url,\n  encoding: null,\n  json: false,\n});\n\nconst mimeType = audio.mime_type || meta.mime_type || 'audio/ogg';\n\nreturn [{\n  json: {\n    ...data,\n    voiceFileId: mediaId,\n    voiceMimeType: mimeType\n  },\n  binary: {\n    data: {\n      data: Buffer.from(fileBuffer),\n      mimeType,\n      fileName: `${mediaId}.ogg`\n    }\n  }\n}];"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "transcribe_voice",
+      "name": "Transcribe Voice",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        -2224,
+        -288
+      ],
+      "parameters": {
+        "resource": "audio",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "inputType": "binary",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CVBgyokqr4qUIaKx",
+          "name": "Plataformas Network API"
+        }
+      }
+    },
+    {
+      "id": "voice_to_text",
+      "name": "Voice to Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2000,
+        -288
+      ],
+      "parameters": {
+        "jsCode": "const transcription = $input.first().json.content?.parts?.[0]?.text || '';\nconst original = $('Detect Message Type').first().json;\nconst download = $('Download Voice Media').first();\nconst binaryData = download.binary?.data;\nconst buffer = binaryData?.data;\nconst audioBase64 = buffer ? buffer.toString('base64') : '';\nconst mimeType = download.json.voiceMimeType || 'audio/ogg';\nconst voiceFileId = download.json.voiceFileId || '';\n\nreturn {\n  json: {\n    from: original.from,\n    chatId: original.chatId,\n    text: transcription,\n    type: 'text',\n    originalType: 'voice',\n    voiceFileId,\n    voiceMimeType: mimeType,\n    voiceBase64: audioBase64,\n    timestamp: original.timestamp,\n    messageId: original.messageId,\n    rawEvent: original.rawEvent\n  }\n};"
+      }
+    },
+    {
+      "id": "download_photo_media",
+      "name": "Download Photo Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst message = data.message || {};\nconst image = message.image || {};\nconst mediaId = image.id;\n\nif (!mediaId) {\n  return [{ json: { ...data } }];\n}\n\nconst meta = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: `https://graph.facebook.com/v19.0/${mediaId}`,\n  json: true,\n});\n\nconst fileBuffer = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: meta.url,\n  encoding: null,\n  json: false,\n});\n\nconst mimeType = image.mime_type || meta.mime_type || 'image/jpeg';\n\nreturn [{\n  json: {\n    ...data,\n    photoFileId: mediaId,\n    imageMimeType: mimeType\n  },\n  binary: {\n    image: {\n      data: Buffer.from(fileBuffer),\n      mimeType,\n      fileName: `${mediaId}.jpg`\n    }\n  }\n}];"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "process_photo",
+      "name": "Process Photo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const original = $('Detect Message Type').first().json;\nconst download = $('Download Photo Media').first();\nconst imageBinary = download.binary?.image;\nconst buffer = imageBinary?.data;\nconst base64 = buffer ? buffer.toString('base64') : '';\nconst message = original.message || {};\nconst caption = message.image?.caption || message.caption || '';\n\nreturn {\n  json: {\n    from: original.from,\n    chatId: original.chatId,\n    text: caption || '',\n    type: 'text',\n    originalType: 'photo',\n    hasImage: true,\n    photoFileId: download.json.photoFileId || '',\n    imageBase64: base64,\n    imageMimeType: download.json.imageMimeType || imageBinary?.mimeType || 'image/jpeg',\n    timestamp: original.timestamp,\n    messageId: original.messageId,\n    rawEvent: original.rawEvent\n  },\n  binary: {\n    image: imageBinary\n  }\n};"
+      }
+    },
+    {
+      "id": "download_document_media",
+      "name": "Download Document Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst message = data.message || {};\nconst document = message.document || {};\nconst mediaId = document.id;\n\nif (!mediaId) {\n  return [{ json: { ...data } }];\n}\n\nconst meta = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: `https://graph.facebook.com/v19.0/${mediaId}`,\n  json: true,\n});\n\nconst fileBuffer = await this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'GET',\n  url: meta.url,\n  encoding: null,\n  json: false,\n});\n\nconst mimeType = document.mime_type || meta.mime_type || 'application/octet-stream';\nconst filename = document.filename || `${mediaId}`;\n\nreturn [{\n  json: {\n    ...data,\n    documentFileId: mediaId,\n    documentMimeType: mimeType,\n    documentFilename: filename\n  },\n  binary: {\n    document: {\n      data: Buffer.from(fileBuffer),\n      mimeType,\n      fileName: filename\n    }\n  }\n}];"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "process_document",
+      "name": "Process Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const original = $('Detect Message Type').first().json;\nconst download = $('Download Document Media').first();\nconst documentBinary = download.binary?.document;\nconst buffer = documentBinary?.data;\nconst base64 = buffer ? buffer.toString('base64') : '';\nconst message = original.message || {};\nconst caption = message.document?.caption || '';\n\nreturn {\n  json: {\n    from: original.from,\n    chatId: original.chatId,\n    text: caption || '',\n    type: 'text',\n    originalType: 'document',\n    hasDocument: true,\n    documentFileId: download.json.documentFileId || '',\n    filename: download.json.documentFilename || documentBinary?.fileName || '',\n    mimeType: download.json.documentMimeType || documentBinary?.mimeType || 'application/octet-stream',\n    documentBase64: base64,\n    timestamp: original.timestamp,\n    messageId: original.messageId,\n    rawEvent: original.rawEvent\n  },\n  binary: {\n    document: documentBinary\n  }\n};"
+      }
+    },
+    {
+      "id": "process_location",
+      "name": "Process Location",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        288
+      ],
+      "parameters": {
+        "jsCode": "const original = $input.first().json;\nconst message = original.message || {};\nconst location = message.location || {};\n\nreturn {\n  json: {\n    from: original.from,\n    chatId: original.chatId,\n    text: '',\n    type: 'text',\n    originalType: 'location',\n    hasLocation: true,\n    latitude: location.latitude || null,\n    longitude: location.longitude || null,\n    timestamp: original.timestamp,\n    messageId: original.messageId,\n    rawEvent: original.rawEvent\n  }\n};"
+      }
+    },
+    {
+      "id": "merge_all_types",
+      "name": "Merge All Types",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -2000,
+        -256
+      ],
+      "parameters": {
+        "mode": "passThrough",
+        "combineBy": "inputData",
+        "numberInputs": 6
+      }
+    },
+    {
+      "id": "get_last_state",
+      "name": "Get Last State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        -1648,
+        -192
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "1HEnbDeA73v3iaVy",
+          "mode": "list",
+          "cachedResultName": "conversation_state"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "from",
+              "keyValue": "={{ $json.from }}"
+            }
+          ]
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "check_state",
+      "name": "Check State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1424,
+        -192
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst messageData = $('Merge All Types').first().json;\n\nconst lastStates = Array.isArray(input) ? input : [input];\nconst last = lastStates[0] || {};\n\nconst text = (messageData.text || '').toLowerCase().trim();\nconst type = messageData.type || 'text';\nconst callbackData = messageData.routerCategory || '';\n\nconst menuCommands = ['/start', '/menu', '/exit', 'menu', 'ir_menu', 'inicio', 'hola', 'exit'];\nconst showMenu = menuCommands.includes(text);\n\nconst categories = ['fichajes', 'vacaciones', 'ausencias', 'valoracion', 'presupuesto', 'factura', 'contactos', 'visita', 'facturacion'];\nconst isMainMenuClick = type === 'callback' && categories.includes(callbackData);\nconst isSubmenuAction = type === 'callback' && (callbackData.includes('_consultar') || callbackData.includes('_crear'));\n\nreturn {\n  json: {\n    ...messageData,\n    showMenu,\n    isMainMenuClick,\n    isSubmenuAction,\n    currentState: last.state_json || null,\n    previousStates: lastStates\n  }\n};"
+      }
+    },
+    {
+      "id": "should_show_menu",
+      "name": "Should Show Menu?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        -192
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "show-menu-check",
+              "leftValue": "={{ $json.showMenu }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "send_menu",
+      "name": "Send Menu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -288
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst to = data.chatId;\nconst phoneNumberId = '766013233264996';\n\nawait this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'POST',\n  url: `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,\n  json: true,\n  body: {\n    messaging_product: 'whatsapp',\n    to,\n    type: 'interactive',\n    interactive: {\n      type: 'button',\n      body: {\n        text: '¡Hola! 👋 Soy *Alfred*, tu asistente de Optimiza Eficiencia Energética.\n\n¿Qué necesitas?'\n      },\n      action: {\n        buttons: [\n          { type: 'reply', reply: { id: 'fichajes', title: '⏰ Fichajes' } },\n          { type: 'reply', reply: { id: 'vacaciones', title: '🏖️ Vacaciones' } },\n          { type: 'reply', reply: { id: 'ausencias', title: '🏥 Ausencias' } },\n          { type: 'reply', reply: { id: 'valoracion', title: '🏗️ Valoración' } },\n          { type: 'reply', reply: { id: 'presupuesto', title: '📊 Presupuesto' } },\n          { type: 'reply', reply: { id: 'factura', title: '📄 Factura' } },\n          { type: 'reply', reply: { id: 'contactos', title: '👥 Contactos' } },\n          { type: 'reply', reply: { id: 'visita', title: '🚗 Visita' } },\n          { type: 'reply', reply: { id: 'facturacion', title: '💰 Facturación' } }\n        ]\n      }\n    }\n  }\n});\n\nreturn {\n  json: data\n};"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "clear_state",
+      "name": "Clear State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        -752,
+        -288
+      ],
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "1HEnbDeA73v3iaVy",
+          "mode": "list",
+          "cachedResultName": "conversation_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "from",
+              "keyValue": "={{ $('Check State').item.json.from }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state_json": "={{\"\"}}",
+            "from": "={{ $('Check State').item.json.from }}",
+            "waiting_action": "={{\"\"}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "from",
+              "displayName": "from",
+              "type": "string",
+              "display": true
+            },
+            {
+              "id": "state_json",
+              "displayName": "state_json",
+              "type": "string",
+              "display": true
+            },
+            {
+              "id": "waiting_action",
+              "displayName": "waiting_action",
+              "type": "string",
+              "display": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_main_menu_click",
+      "name": "Is Main Menu Click?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "main-menu-click",
+              "leftValue": "={{ $json.isMainMenuClick }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare_submenu_data",
+      "name": "Prepare Submenu Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst category = data.routerCategory;\n\nconst categoryLabels = {\n  fichajes: '⏰ FICHAJES',\n  vacaciones: '🏖️ VACACIONES',\n  ausencias: '🏥 AUSENCIAS',\n  valoracion: '🏗️ VALORACIÓN',\n  presupuesto: '📊 PRESUPUESTO',\n  factura: '📄 FACTURA',\n  contactos: '👥 CONTACTOS',\n  visita: '🚗 VISITA',\n  facturacion: '💰 FACTURACIÓN'\n};\n\nconst label = categoryLabels[category] || category?.toUpperCase() || '';\n\nreturn {\n  json: {\n    ...data,\n    category,\n    categoryLabel: label,\n    consultarCallback: `${category}_consultar`,\n    crearCallback: `${category}_crear`\n  }\n};"
+      }
+    },
+    {
+      "id": "send_generic_submenu",
+      "name": "Send Generic Submenu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -528,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst to = data.chatId;\nconst phoneNumberId = '766013233264996';\n\nawait this.helpers.requestWithAuthentication.call(this, 'whatsAppApi', {\n  method: 'POST',\n  url: `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,\n  json: true,\n  body: {\n    messaging_product: 'whatsapp',\n    to,\n    type: 'interactive',\n    interactive: {\n      type: 'button',\n      body: {\n        text: `${data.categoryLabel}\n\n¿Qué quieres hacer?`\n      },\n      action: {\n        buttons: [\n          { type: 'reply', reply: { id: data.consultarCallback, title: '🔍 Consultar' } },\n          { type: 'reply', reply: { id: data.crearCallback, title: '🆕 Crear nueva' } }\n        ]\n      }\n    }\n  }\n});\n\nreturn {\n  json: data\n};"
+      },
+      "credentials": {
+        "whatsAppApi": {
+          "id": "zXNfmozR2UL0N2hS",
+          "name": "Plataformas Network"
+        }
+      }
+    },
+    {
+      "id": "save_category_state",
+      "name": "Save Category State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        -96
+      ],
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "1HEnbDeA73v3iaVy",
+          "mode": "list",
+          "cachedResultName": "conversation_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "from",
+              "keyValue": "={{ $('Prepare Submenu Data').item.json.from }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state_json": "={{ $('Prepare Submenu Data').item.json.category }}",
+            "from": "={{ $('Prepare Submenu Data').item.json.from }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "from",
+              "displayName": "from",
+              "type": "string",
+              "display": true
+            },
+            {
+              "id": "state_json",
+              "displayName": "state_json",
+              "type": "string",
+              "display": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "is_submenu_action",
+      "name": "Is Submenu Action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "submenu-action-check",
+              "leftValue": "={{ $json.isSubmenuAction }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "state-check",
+              "leftValue": "={{ $json.currentState }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare_request_data",
+      "name": "Prepare Request Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst callbackData = data.routerCategory || '';\n\nconst parts = callbackData.split('_');\nlet action = '';\nif (parts.length === 2) {\n  action = parts[1];\n}\n\nconst category = data.currentState;\n\nconst payload = {\n  from: data.from,\n  chat_id: data.chatId,\n  text: data.text || callbackData,\n  original_type: data.originalType || 'text',\n  platform: 'whatsapp',\n  timestamp: data.timestamp,\n  message_id: data.messageId,\n  callback_data: callbackData,\n  action\n};\n\nif (data.hasImage) {\n  payload.has_image = true;\n  payload.photo_file_id = data.photoFileId;\n  payload.image_base64 = data.imageBase64;\n  payload.image_mime_type = data.imageMimeType;\n}\n\nif (data.hasDocument) {\n  payload.has_document = true;\n  payload.document_file_id = data.documentFileId;\n  payload.filename = data.filename;\n  payload.mime_type = data.mimeType;\n  payload.document_base64 = data.documentBase64;\n}\n\nif (data.hasLocation) {\n  payload.has_location = true;\n  payload.latitude = data.latitude;\n  payload.longitude = data.longitude;\n}\n\nif (data.voiceFileId) {\n  payload.voice_file_id = data.voiceFileId;\n  payload.voice_base64 = data.voiceBase64;\n  payload.voice_mime_type = data.voiceMimeType;\n}\n\nconst endpoints = {\n  fichajes: 'https://automatizacion.plataformasnetwork.com/webhook/fichajes_optimiza',\n  vacaciones: 'https://automatizacion.plataformasnetwork.com/webhook/vacaciones_optimiza',\n  ausencias: 'https://automatizacion.plataformasnetwork.com/webhook/ausencias_optimiza',\n  valoracion: 'https://automatizacion.plataformasnetwork.com/webhook/crear_valoracion_optimiza',\n  presupuesto: 'https://automatizacion.plataformasnetwork.com/webhook/presupuestos_optimiza',\n  factura: 'https://automatizacion.plataformasnetwork.com/webhook/facturas_optimiza',\n  contactos: 'https://automatizacion.plataformasnetwork.com/webhook/contactos_optimiza',\n  visita: 'https://automatizacion.plataformasnetwork.com/webhook/visita_optimiza',\n  facturacion: 'https://automatizacion.plataformasnetwork.com/webhook/facturacion_optimiza'\n};\n\nconst endpoint = endpoints[category];\n\nif (!endpoint) {\n  throw new Error(`Unknown category: ${category}`);\n}\n\nreturn {\n  json: {\n    endpoint,\n    category,\n    action,\n    payload,\n    chatId: data.chatId,\n    callbackData\n  }\n};"
+      }
+    },
+    {
+      "id": "upsert_state",
+      "name": "Upsert State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        -528,
+        96
+      ],
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "1HEnbDeA73v3iaVy",
+          "mode": "list",
+          "cachedResultName": "conversation_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "from",
+              "keyValue": "={{ $json.payload.from }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state_json": "={{ $json.category }}",
+            "from": "={{ $json.payload.from }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "from",
+              "displayName": "from",
+              "type": "string",
+              "display": true
+            },
+            {
+              "id": "state_json",
+              "displayName": "state_json",
+              "type": "string",
+              "display": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "send_http_request",
+      "name": "Send HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -304,
+        96
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Prepare Request Data').item.json.endpoint }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Prepare Request Data').item.json.payload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Event": {
+      "main": [
+        [
+          {
+            "node": "Is Button Reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Button Reply?": {
+      "main": [
+        [
+          {
+            "node": "Process Button Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Detect Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Button Reply": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Message Type": {
+      "main": [
+        [
+          {
+            "node": "Is Text?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Audio?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Photo?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Document?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Location?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Text?": {
+      "main": [
+        [
+          {
+            "node": "Process Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Text": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Audio?": {
+      "main": [
+        [
+          {
+            "node": "Download Voice Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Voice Media": {
+      "main": [
+        [
+          {
+            "node": "Transcribe Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe Voice": {
+      "main": [
+        [
+          {
+            "node": "Voice to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice to Text": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Is Photo?": {
+      "main": [
+        [
+          {
+            "node": "Download Photo Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Photo Media": {
+      "main": [
+        [
+          {
+            "node": "Process Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Photo": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Is Document?": {
+      "main": [
+        [
+          {
+            "node": "Download Document Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Document Media": {
+      "main": [
+        [
+          {
+            "node": "Process Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Document": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Is Location?": {
+      "main": [
+        [
+          {
+            "node": "Process Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Location": {
+      "main": [
+        [
+          {
+            "node": "Merge All Types",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Merge All Types": {
+      "main": [
+        [
+          {
+            "node": "Get Last State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last State": {
+      "main": [
+        [
+          {
+            "node": "Check State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check State": {
+      "main": [
+        [
+          {
+            "node": "Should Show Menu?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Show Menu?": {
+      "main": [
+        [
+          {
+            "node": "Send Menu",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Main Menu Click?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Submenu Action?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Menu": {
+      "main": [
+        [
+          {
+            "node": "Clear State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Main Menu Click?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Submenu Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Submenu Data": {
+      "main": [
+        [
+          {
+            "node": "Send Generic Submenu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Generic Submenu": {
+      "main": [
+        [
+          {
+            "node": "Save Category State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Submenu Action?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request Data": {
+      "main": [
+        [
+          {
+            "node": "Upsert State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert State": {
+      "main": [
+        [
+          {
+            "node": "Send HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
